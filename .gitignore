@@ -44,3 +44,10 @@ opcode.yaml
 
 # Claude
 .claude/
+
+# Project (not version controlled)
+spec.md
+plan.md
+task.md
+checklist.md
+tests/
