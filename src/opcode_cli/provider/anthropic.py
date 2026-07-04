@@ -21,16 +21,15 @@ class AnthropicProvider(BaseProvider):
     def chat(self, messages: list[Message]) -> Message:
         raise NotImplementedError("use achat() for streaming")
 
-    async def achat(self, messages: list[Message]) -> AsyncIterator[StreamChunk]:
+    async def achat(
+        self, messages: list[Message], tools: list[dict] | None = None
+    ) -> AsyncIterator[StreamChunk]:
         system_messages = [m for m in messages if m.role == "system"]
         chat_messages = [m for m in messages if m.role != "system"]
 
         body: dict = {
             "model": self._model,
-            "messages": [
-                {"role": m.role, "content": m.content}
-                for m in chat_messages
-            ],
+            "messages": [self._convert_message(m) for m in chat_messages],
             "stream": True,
             "thinking": {
                 "type": "enabled",
@@ -39,6 +38,8 @@ class AnthropicProvider(BaseProvider):
         }
         if system_messages:
             body["system"] = "\n".join(m.content for m in system_messages)
+        if tools:
+            body["tools"] = tools
 
         headers = {
             "x-api-key": self._api_key,
@@ -58,7 +59,7 @@ class AnthropicProvider(BaseProvider):
                     f"Anthropic API error {response.status_code}: {error_text.decode()}"
                 )
 
-            current_block_type: str | None = None
+            tool_use_buf: dict | None = None
 
             async for line in response.aiter_lines():
                 if not line.startswith("data: "):
@@ -76,21 +77,46 @@ class AnthropicProvider(BaseProvider):
                 event_type = event.get("type", "")
 
                 if event_type == "content_block_start":
-                    current_block_type = event.get("content_block", {}).get(
-                        "type", "text"
-                    )
+                    block = event.get("content_block", {})
+                    block_type = block.get("type", "")
+                    if block_type == "tool_use":
+                        tool_use_buf = {
+                            "id": block.get("id", ""),
+                            "name": block.get("name", ""),
+                            "fragments": [],
+                        }
+                    else:
+                        tool_use_buf = None
 
                 elif event_type == "content_block_delta":
                     delta = event.get("delta", {})
                     delta_type = delta.get("type", "text")
                     if delta_type == "text_delta":
-                        yield StreamChunk(
-                            content=delta.get("text", ""),
-                        )
+                        yield StreamChunk(content=delta.get("text", ""))
                     elif delta_type == "thinking_delta":
+                        yield StreamChunk(thinking=delta.get("thinking", ""))
+                    elif delta_type == "input_json_delta":
+                        if tool_use_buf is not None:
+                            tool_use_buf["fragments"].append(
+                                delta.get("partial_json", "")
+                            )
+
+                elif event_type == "content_block_stop":
+                    if tool_use_buf is not None:
+                        try:
+                            input_dict = json.loads(
+                                "".join(tool_use_buf["fragments"])
+                            )
+                        except json.JSONDecodeError:
+                            input_dict = {}
                         yield StreamChunk(
-                            thinking=delta.get("thinking", ""),
+                            tool_use={
+                                "id": tool_use_buf["id"],
+                                "name": tool_use_buf["name"],
+                                "input": input_dict,
+                            }
                         )
+                        tool_use_buf = None
 
                 elif event_type == "message_delta":
                     finish_reason = event.get("delta", {}).get("stop_reason")
@@ -98,3 +124,31 @@ class AnthropicProvider(BaseProvider):
 
                 elif event_type == "message_stop":
                     break
+
+    def _convert_message(self, m: Message) -> dict:
+        if m.role == "tool":
+            return {
+                "role": "user",
+                "content": [
+                    {
+                        "type": "tool_result",
+                        "tool_use_id": m.tool_call_id,
+                        "content": m.content,
+                    }
+                ],
+            }
+
+        if m.tool_calls:
+            blocks: list[dict] = []
+            if m.content:
+                blocks.append({"type": "text", "text": m.content})
+            for tc in m.tool_calls:
+                blocks.append({
+                    "type": "tool_use",
+                    "id": tc.id,
+                    "name": tc.name,
+                    "input": tc.input,
+                })
+            return {"role": "assistant", "content": blocks}
+
+        return {"role": m.role, "content": m.content}
