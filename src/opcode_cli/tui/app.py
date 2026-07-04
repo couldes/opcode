@@ -1,6 +1,6 @@
 from textual.app import App, ComposeResult
-from textual.containers import Container
-from textual.widgets import Input, RichLog
+from textual.containers import VerticalScroll
+from textual.widgets import Input, Static
 
 from opcode_cli.controller import ChatController
 from opcode_cli.provider.base import StreamChunk
@@ -8,18 +8,27 @@ from opcode_cli.provider.base import StreamChunk
 
 class OpcodeApp(App):
 
+    ENABLE_MOUSE_CAPTURE = False
+
     CSS = """
-    #history {
+    #chat {
         height: 1fr;
+        overflow-y: auto;
         border: none;
+        padding: 0 1;
     }
-    #streaming {
-        height: auto;
-        max-height: 40%;
-        border: none;
+    .user-msg {
+        margin: 1 0 0 0;
+    }
+    .assistant-msg {
+        margin: 0 0 0 0;
+    }
+    .tool-status {
+        margin: 0 0 0 0;
     }
     #user-input {
         dock: bottom;
+        margin: 0 1;
         border: solid $primary;
     }
     """
@@ -27,17 +36,14 @@ class OpcodeApp(App):
     def __init__(self, controller: ChatController):
         super().__init__()
         self._controller = controller
+        self._tool_status: Static | None = None
 
     def compose(self) -> ComposeResult:
-        with Container():
-            yield RichLog(id="history", highlight=True, markup=True, wrap=True)
-            yield RichLog(id="streaming", highlight=True, markup=True, wrap=True)
-            yield Input(id="user-input", placeholder="Type your message... (/exit to quit)")
+        with VerticalScroll(id="chat", can_focus=False):
+            yield Static("Welcome to opcode. Type /exit to quit.")
+        yield Input(id="user-input", placeholder="Type a message... (/exit to quit)")
 
     def on_mount(self) -> None:
-        self.query_one("#history", RichLog).write(
-            "Welcome to opcode. Type /exit to quit.", animate=False
-        )
         self.query_one("#user-input", Input).focus()
 
     async def on_input_submitted(self, event: Input.Submitted) -> None:
@@ -51,41 +57,68 @@ class OpcodeApp(App):
             return
 
         inp = self.query_one("#user-input", Input)
-        history = self.query_one("#history", RichLog)
-        streaming = self.query_one("#streaming", RichLog)
+        chat = self.query_one("#chat", VerticalScroll)
 
         inp.disabled = True
-        history.write(f"[bold]You:[/bold] {value}")
 
-        content_buf = ""
+        await chat.mount(Static(f"[bold cyan]> {value}[/bold cyan]", classes="user-msg"))
+        chat.scroll_end(animate=False)
+
+        buf = ""
         thinking_buf = ""
+        has_content = False
 
-        def render_streaming() -> None:
-            streaming.clear()
+        assistant = Static("", classes="assistant-msg")
+        await chat.mount(assistant)
+        chat.scroll_end(animate=False)
+
+        def render() -> str:
+            lines = ["[bold green]┃ opcode[/bold green]"]
             if thinking_buf:
-                streaming.write(f"[dim italic]{thinking_buf}[/dim italic]")
-            if content_buf:
-                streaming.write(content_buf)
+                lines.append(f"[dim italic]{thinking_buf}[/dim italic]")
+            if buf:
+                lines.append(buf)
+            return "\n".join(lines)
 
         async def on_chunk(chunk: StreamChunk) -> None:
-            nonlocal content_buf, thinking_buf
+            nonlocal buf, thinking_buf, has_content
             if chunk.content:
-                content_buf += chunk.content
-                render_streaming()
+                has_content = True
+                buf += chunk.content
             if chunk.thinking:
                 thinking_buf += chunk.thinking
-                render_streaming()
+            assistant.update(render())
+            chat.scroll_end(animate=False)
+
+        async def on_tool_call(*args) -> None:
+            nonlocal has_content
+            if len(args) == 2:
+                name, input_dict = args
+                has_content = True
+                args_str = ", ".join(
+                    f"{k}={repr(v)[:40]}" for k, v in input_dict.items()
+                )
+                self._tool_status = Static(
+                    f"[dim]calling {name}({args_str})...[/dim]",
+                    classes="tool-status",
+                )
+                await chat.mount(self._tool_status)
+            elif len(args) == 3:
+                name, _input_dict, result = args
+                if self._tool_status is not None:
+                    icon = "OK" if result.success else "FAIL"
+                    self._tool_status.update(f"[dim]{icon} {name}[/dim]")
+            chat.scroll_end(animate=False)
 
         try:
-            await self._controller.send(value, on_chunk)
+            await self._controller.send(value, on_chunk, on_tool_call)
+        except Exception:
+            assistant.update("[bold red]Error: unexpected error[/bold red]")
         finally:
-            if content_buf:
-                history.write(f"[bold]Assistant:[/bold] {content_buf}")
-            elif thinking_buf:
-                history.write(f"[bold]Assistant:[/bold] [dim italic](thinking only)[/dim italic]")
-            else:
-                history.write("[bold]Assistant:[/bold] [dim](no response)[/dim]")
-            streaming.clear()
+            if not has_content and not thinking_buf:
+                assistant.update(
+                    f"[bold green]┃ opcode[/bold green]\n[dim](no response)[/dim]"
+                )
             inp.clear()
             inp.disabled = False
             inp.focus()
