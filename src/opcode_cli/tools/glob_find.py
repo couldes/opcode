@@ -7,7 +7,9 @@ class GlobFindTool(BaseTool):
     name = "glob_find"
     description = (
         "Find files matching a glob pattern. "
-        "Returns a list of matching file paths, one per line."
+        "Returns a list of matching file paths, one per line. "
+        "Prefer this tool over Bash find/ls. "
+        "Multiple independent searches can be called in parallel in the same turn."
     )
     parameters = {
         "type": "object",
@@ -23,6 +25,7 @@ class GlobFindTool(BaseTool):
         },
         "required": ["pattern"],
     }
+    read_only = True
     MAX_RESULTS = 200
 
     async def execute(self, pattern: str, path: str = ".") -> ToolResult:

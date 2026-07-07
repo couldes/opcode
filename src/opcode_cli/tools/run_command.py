@@ -6,7 +6,10 @@ from opcode_cli.tools.base import BaseTool, ToolResult
 class RunCommandTool(BaseTool):
     name = "run_command"
     description = (
-        "Execute a shell command. Returns stdout, stderr, and exit code."
+        "Execute a shell command. Returns stdout, stderr, and exit code. "
+        "The description parameter must clearly state what the command does. "
+        "Prefer dedicated tools (ReadFile, WriteFile, EditFile, GlobFind, GrepSearch) "
+        "over this tool for file operations."
     )
     parameters = {
         "type": "object",
@@ -22,6 +25,7 @@ class RunCommandTool(BaseTool):
         },
         "required": ["command"],
     }
+    read_only = False
     MAX_OUTPUT = 50 * 1024
 
     async def execute(self, command: str, cwd: str | None = None) -> ToolResult:

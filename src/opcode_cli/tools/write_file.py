@@ -7,7 +7,9 @@ class WriteFileTool(BaseTool):
     name = "write_file"
     description = (
         "Write content to a file. Creates parent directories if needed. "
-        "Overwrites existing files."
+        "Overwrites existing files. "
+        "Prefer this tool over Bash echo >. "
+        "The path parameter must use an absolute path."
     )
     parameters = {
         "type": "object",
@@ -23,6 +25,7 @@ class WriteFileTool(BaseTool):
         },
         "required": ["path", "content"],
     }
+    read_only = False
 
     async def execute(self, path: str, content: str) -> ToolResult:
         p = Path(path)

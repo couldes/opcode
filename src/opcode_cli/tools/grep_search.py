@@ -17,7 +17,9 @@ class GrepSearchTool(BaseTool):
     name = "grep_search"
     description = (
         "Search file contents using a regex pattern. "
-        "Returns matching lines with file path and line number."
+        "Returns matching lines with file path and line number. "
+        "Prefer this tool over Bash grep/rg. "
+        "Multiple independent searches can be called in parallel in the same turn."
     )
     parameters = {
         "type": "object",
@@ -33,6 +35,7 @@ class GrepSearchTool(BaseTool):
         },
         "required": ["pattern"],
     }
+    read_only = True
     MAX_MATCHES = 500
 
     async def execute(self, pattern: str, path: str = ".") -> ToolResult:

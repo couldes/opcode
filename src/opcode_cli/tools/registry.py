@@ -22,6 +22,9 @@ class ToolRegistry:
     def list_tools(self) -> list[BaseTool]:
         return list(self._tools.values())
 
+    def get_tools_by_read_only(self, read_only: bool) -> list[BaseTool]:
+        return [t for t in self._tools.values() if t.read_only == read_only]
+
     def to_anthropic_format(self) -> list[dict]:
         return [
             {

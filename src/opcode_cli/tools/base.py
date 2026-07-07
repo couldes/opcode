@@ -20,6 +20,7 @@ class BaseTool(ABC):
     name: str = ""
     description: str = ""
     parameters: dict = {}
+    read_only: bool = False
 
     @abstractmethod
     async def execute(self, **kwargs) -> ToolResult:

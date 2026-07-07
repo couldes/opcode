@@ -9,7 +9,10 @@ class EditFileTool(BaseTool):
         "Replace a string in a file by exact unique match. "
         "The old_string must match exactly once in the file. "
         "If 0 or multiple matches, the edit is rejected with a clear error — "
-        "provide more surrounding context to make the match unique."
+        "provide more surrounding context to make the match unique. "
+        "Prefer this tool over Bash sed. "
+        "Must read the file with ReadFile first to obtain the exact old_string. "
+        "The path parameter must use an absolute path."
     )
     parameters = {
         "type": "object",
@@ -29,6 +32,7 @@ class EditFileTool(BaseTool):
         },
         "required": ["path", "old_string", "new_string"],
     }
+    read_only = False
 
     async def execute(
         self, path: str, old_string: str, new_string: str

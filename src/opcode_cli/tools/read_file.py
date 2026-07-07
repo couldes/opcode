@@ -5,7 +5,11 @@ from opcode_cli.tools.base import BaseTool, ToolResult
 
 class ReadFileTool(BaseTool):
     name = "read_file"
-    description = "Read the entire contents of a file. Returns the file text."
+    description = (
+        "Read the entire contents of a file. Returns the file text. "
+        "Prefer this tool over Bash cat/head/tail. "
+        "The path parameter must use an absolute path."
+    )
     parameters = {
         "type": "object",
         "properties": {
@@ -16,6 +20,7 @@ class ReadFileTool(BaseTool):
         },
         "required": ["path"],
     }
+    read_only = True
     MAX_SIZE = 100 * 1024
 
     async def execute(self, path: str) -> ToolResult:
