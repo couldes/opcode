@@ -36,6 +36,7 @@ class BaseProvider(ABC):
 
     @abstractmethod
     async def achat(
-        self, messages: list[Message], tools: list[dict] | None = None
+        self, messages: list[Message], tools: list[dict] | None = None,
+        system: str | None = None,
     ) -> AsyncIterator[StreamChunk]:
         ...

@@ -7,6 +7,9 @@ from opcode_cli.config import ProviderConfig
 from opcode_cli.provider.base import BaseProvider, Message, StreamChunk
 
 
+CACHE_CONTROL_MARKER = "<!-- cache_control: ephemeral -->"
+
+
 class AnthropicProvider(BaseProvider):
     ANTHROPIC_VERSION = "2023-06-01"
     DEFAULT_THINKING_BUDGET = 4000
@@ -17,14 +20,25 @@ class AnthropicProvider(BaseProvider):
         self._api_key = config.api_key
         self._thinking_budget = thinking_budget or self.DEFAULT_THINKING_BUDGET
         self._client = httpx.AsyncClient(timeout=httpx.Timeout(120.0))
+        self._last_usage: dict | None = None
+
+    @property
+    def last_usage(self) -> dict | None:
+        return self._last_usage
 
     def chat(self, messages: list[Message]) -> Message:
         raise NotImplementedError("use achat() for streaming")
 
     async def achat(
-        self, messages: list[Message], tools: list[dict] | None = None
+        self, messages: list[Message], tools: list[dict] | None = None,
+        system: str | None = None,
     ) -> AsyncIterator[StreamChunk]:
-        system_messages = [m for m in messages if m.role == "system"]
+        system_text: str | None = system
+        if system_text is None:
+            system_msgs = [m for m in messages if m.role == "system"]
+            if system_msgs:
+                system_text = "\n".join(m.content for m in system_msgs)
+
         chat_messages = [m for m in messages if m.role != "system"]
 
         body: dict = {
@@ -36,8 +50,18 @@ class AnthropicProvider(BaseProvider):
                 "budget_tokens": self._thinking_budget,
             },
         }
-        if system_messages:
-            body["system"] = "\n".join(m.content for m in system_messages)
+        if system_text:
+            if CACHE_CONTROL_MARKER in system_text:
+                clean_text = system_text.replace(CACHE_CONTROL_MARKER, "").strip()
+                body["system"] = [
+                    {
+                        "type": "text",
+                        "text": clean_text,
+                        "cache_control": {"type": "ephemeral"},
+                    }
+                ]
+            else:
+                body["system"] = system_text
         if tools:
             body["tools"] = tools
 
@@ -76,7 +100,13 @@ class AnthropicProvider(BaseProvider):
 
                 event_type = event.get("type", "")
 
-                if event_type == "content_block_start":
+                if event_type == "message_start":
+                    msg = event.get("message", {})
+                    usage = msg.get("usage")
+                    if usage:
+                        self._last_usage = dict(usage)
+
+                elif event_type == "content_block_start":
                     block = event.get("content_block", {})
                     block_type = block.get("type", "")
                     if block_type == "tool_use":

@@ -20,9 +20,13 @@ class OpenAIProvider(BaseProvider):
         raise NotImplementedError("use achat() for streaming")
 
     async def achat(
-        self, messages: list[Message], tools: list[dict] | None = None
+        self, messages: list[Message], tools: list[dict] | None = None,
+        system: str | None = None,
     ) -> AsyncIterator[StreamChunk]:
-        openai_messages = [self._convert_message(m) for m in messages]
+        openai_messages: list[dict] = []
+        if system:
+            openai_messages.append({"role": "system", "content": system})
+        openai_messages.extend(self._convert_message(m) for m in messages)
 
         kwargs: dict = {
             "model": self._model,
