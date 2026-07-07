@@ -1,14 +1,40 @@
+import asyncio
+
 from textual.app import App, ComposeResult
 from textual.containers import VerticalScroll
-from textual.widgets import Input, Static
+from textual.widgets import Static, TextArea
 
-from opcode_cli.controller import ChatController
-from opcode_cli.provider.base import StreamChunk
+from opcode_cli.agent.agent import Agent
+from opcode_cli.agent.events import (
+    DoneEvent,
+    ErrorEvent,
+    TextDelta,
+    ThinkingDelta,
+    ToolCallStart,
+    ToolCallInput,
+    ToolResultEvent,
+)
+
+
+class ThinkingToggle(Static):
+    """Clickable toggle for thinking content."""
+
+    def __init__(self, content_widget: Static) -> None:
+        super().__init__("", classes="thinking-toggle")
+        self._expanded = True
+        self._content = content_widget
+
+    def on_click(self) -> None:
+        self._expanded = not self._expanded
+        if self._expanded:
+            self._content.remove_class("hidden")
+            self.update("[dim][-] Thinking (click to collapse)[/dim]")
+        else:
+            self._content.add_class("hidden")
+            self.update("[dim][+] Thinking (click to expand)[/dim]")
 
 
 class OpcodeApp(App):
-
-    ENABLE_MOUSE_CAPTURE = False
 
     CSS = """
     #chat {
@@ -23,6 +49,20 @@ class OpcodeApp(App):
     .assistant-msg {
         margin: 0 0 0 0;
     }
+    .thinking-text {
+        margin: 0 0 0 2;
+        padding: 0 1;
+        height: auto;
+    }
+    .thinking-toggle {
+        margin: 0;
+        padding: 0 1;
+        height: 1;
+        color: $text-disabled;
+    }
+    .hidden {
+        display: none;
+    }
     .tool-status {
         margin: 0 0 0 0;
     }
@@ -30,95 +70,202 @@ class OpcodeApp(App):
         dock: bottom;
         margin: 0 1;
         border: solid $primary;
+        height: auto;
+        min-height: 3;
+        max-height: 12;
     }
     """
 
-    def __init__(self, controller: ChatController):
+    BINDINGS = [
+        ("ctrl+x", "copy_response", "Copy last response"),
+        ("ctrl+enter", "submit_input", "Send message"),
+    ]
+
+    def __init__(self, agent: Agent):
         super().__init__()
-        self._controller = controller
-        self._tool_status: Static | None = None
+        self._agent = agent
+        self._plan_pending = False
+        self._last_response = ""
 
     def compose(self) -> ComposeResult:
         with VerticalScroll(id="chat", can_focus=False):
-            yield Static("Welcome to opcode. Type /exit to quit.")
-        yield Input(id="user-input", placeholder="Type a message... (/exit to quit)")
+            yield Static("Welcome to opcode. Type /exit to quit.\nPress Ctrl+Enter to send, Ctrl+X to copy.")
+        yield TextArea(id="user-input")
 
     def on_mount(self) -> None:
-        self.query_one("#user-input", Input).focus()
+        self.query_one("#user-input", TextArea).focus()
 
-    async def on_input_submitted(self, event: Input.Submitted) -> None:
-        value = event.value.strip()
-        if not value:
+    def on_key(self, event) -> None:
+        if event.key == "escape":
+            self._agent.cancel()
+            event.prevent_default()
             return
 
+        inp = self.query_one("#user-input", TextArea)
+        if not inp.has_focus and not inp.disabled and event.character:
+            inp.focus()
+            inp.insert(event.character)
+            event.prevent_default()
+
+    def action_copy_response(self) -> None:
+        if self._last_response:
+            self.copy_to_clipboard(self._last_response)
+            self.notify("Copied to clipboard", timeout=2)
+
+    def action_submit_input(self) -> None:
+        inp = self.query_one("#user-input", TextArea)
+        value = inp.text.strip()
+        if not value:
+            return
+        inp.text = ""
+        asyncio.ensure_future(self._process_input(value))
+
+    async def _process_input(self, value: str) -> None:
         cmd = value.lower()
+        inp = self.query_one("#user-input", TextArea)
+        chat = self.query_one("#chat", VerticalScroll)
+
         if cmd in ("/exit", "/quit"):
             self.exit()
             return
 
-        inp = self.query_one("#user-input", Input)
-        chat = self.query_one("#chat", VerticalScroll)
+        if cmd == "/copy":
+            if self._last_response:
+                self.copy_to_clipboard(self._last_response)
+                self.notify("Copied to clipboard", timeout=2)
+            else:
+                self.notify("Nothing to copy", timeout=2)
+            inp.focus()
+            return
+
+        if cmd == "/cancel":
+            self._agent.cancel()
+            inp.focus()
+            return
+
+        if cmd == "/plan":
+            self._enter_plan_mode()
+            await chat.mount(Static(
+                "[dim]-- plan mode: read-only tools enabled, describe your task --[/dim]",
+                classes="tool-status",
+            ))
+            chat.scroll_end(animate=False)
+            inp.focus()
+            return
+
+        if cmd == "/do":
+            self._enter_do_mode()
+            await chat.mount(Static(
+                "[dim]-- do mode: all tools enabled, executing plan --[/dim]",
+                classes="tool-status",
+            ))
+            chat.scroll_end(animate=False)
+            inp.focus()
+            return
 
         inp.disabled = True
 
-        await chat.mount(Static(f"[bold cyan]> {value}[/bold cyan]", classes="user-msg"))
+        await chat.mount(Static(f"[bold cyan]• {value}[/bold cyan]", classes="user-msg"))
         chat.scroll_end(animate=False)
 
         buf = ""
         thinking_buf = ""
-        has_content = False
+        error_occurred = False
+        tool_status_widgets: dict[str, Static] = {}
 
         assistant = Static("", classes="assistant-msg")
         await chat.mount(assistant)
+
+        thinking_text = Static("", classes="thinking-text hidden")
+        await chat.mount(thinking_text)
+        thinking_toggle: ThinkingToggle | None = None
+
         chat.scroll_end(animate=False)
 
         def render() -> str:
-            lines = ["[bold green]┃ opcode[/bold green]"]
-            if thinking_buf:
-                lines.append(f"[dim italic]{thinking_buf}[/dim italic]")
+            lines = ["[bold green]opcode[/bold green]"]
             if buf:
                 lines.append(buf)
             return "\n".join(lines)
 
-        async def on_chunk(chunk: StreamChunk) -> None:
-            nonlocal buf, thinking_buf, has_content
-            if chunk.content:
-                has_content = True
-                buf += chunk.content
-            if chunk.thinking:
-                thinking_buf += chunk.thinking
-            assistant.update(render())
-            chat.scroll_end(animate=False)
-
-        async def on_tool_call(*args) -> None:
-            nonlocal has_content
-            if len(args) == 2:
-                name, input_dict = args
-                has_content = True
-                args_str = ", ".join(
-                    f"{k}={repr(v)[:40]}" for k, v in input_dict.items()
-                )
-                self._tool_status = Static(
-                    f"[dim]calling {name}({args_str})...[/dim]",
-                    classes="tool-status",
-                )
-                await chat.mount(self._tool_status)
-            elif len(args) == 3:
-                name, _input_dict, result = args
-                if self._tool_status is not None:
-                    icon = "OK" if result.success else "FAIL"
-                    self._tool_status.update(f"[dim]{icon} {name}[/dim]")
-            chat.scroll_end(animate=False)
-
         try:
-            await self._controller.send(value, on_chunk, on_tool_call)
+            async for agent_event in self._agent.run(value):
+                if isinstance(agent_event, TextDelta):
+                    buf += agent_event.content
+                    assistant.update(render())
+                elif isinstance(agent_event, ThinkingDelta):
+                    thinking_buf += agent_event.content
+                    thinking_text.update(f"[dim italic]{thinking_buf}[/dim italic]")
+                    if thinking_toggle is None:
+                        thinking_text.remove_class("hidden")
+                        thinking_toggle = ThinkingToggle(thinking_text)
+                        await chat.mount(thinking_toggle)
+                elif isinstance(agent_event, ToolCallStart):
+                    status = Static(
+                        f"[dim]calling {agent_event.name}...[/dim]",
+                        classes="tool-status",
+                    )
+                    tool_status_widgets[agent_event.tool_id] = status
+                    await chat.mount(status)
+                elif isinstance(agent_event, ToolCallInput):
+                    pass
+                elif isinstance(agent_event, ToolResultEvent):
+                    w = tool_status_widgets.get(agent_event.tool_id)
+                    if w is not None:
+                        icon = "OK" if agent_event.result.success else "FAIL"
+                        w.update(f"[dim]{icon} {agent_event.name}[/dim]")
+                elif isinstance(agent_event, DoneEvent):
+                    reason = agent_event.finish_reason
+                    if reason == "cancelled":
+                        if not buf:
+                            assistant.update("[bold green]opcode[/bold green]\n[dim](cancelled)[/dim]")
+                    elif reason == "max_iterations":
+                        suffix = "\n[dim][max iterations reached][/dim]"
+                        assistant.update(render() + suffix)
+                    elif reason == "unknown_tool":
+                        assistant.update("[bold green]opcode[/bold green]\n[bold red]Error: repeated unknown tool calls[/bold red]")
+                    elif reason == "stream_error":
+                        pass
+                    elif agent_event.content:
+                        assistant.update(f"[bold green]opcode[/bold green]\n{agent_event.content}")
+                elif isinstance(agent_event, ErrorEvent):
+                    assistant.update(f"[bold green]opcode[/bold green]\n[bold red]Error: {agent_event.message}[/bold red]")
+                    error_occurred = True
+
+                chat.scroll_end(animate=False)
+
         except Exception:
-            assistant.update("[bold red]Error: unexpected error[/bold red]")
+            assistant.update("[bold green]opcode[/bold green]\n[bold red]Error: unexpected error[/bold red]")
+            error_occurred = True
         finally:
-            if not has_content and not thinking_buf:
-                assistant.update(
-                    f"[bold green]┃ opcode[/bold green]\n[dim](no response)[/dim]"
-                )
-            inp.clear()
+            if not buf and not thinking_buf and not error_occurred:
+                assistant.update("[bold green]opcode[/bold green]\n[dim](no response)[/dim]")
+            if thinking_buf and thinking_toggle is not None:
+                thinking_toggle._expanded = False
+                thinking_text.add_class("hidden")
+                thinking_toggle.update("[dim][+] Thinking (click to expand)[/dim]")
+            elif not thinking_buf:
+                thinking_text.remove()
+            self._last_response = buf
             inp.disabled = False
             inp.focus()
+
+    def _enter_plan_mode(self) -> None:
+        plan_mode = self._agent.plan_mode
+        if plan_mode is None:
+            return
+        plan_mode.start_plan()
+        self._plan_pending = True
+        inp = self.query_one("#user-input", TextArea)
+        inp.text = ""
+        inp.border_title = "Describe your task for planning..."
+
+    def _enter_do_mode(self) -> None:
+        plan_mode = self._agent.plan_mode
+        if plan_mode is None:
+            return
+        plan_mode.start_do()
+        self._plan_pending = False
+        inp = self.query_one("#user-input", TextArea)
+        inp.text = ""
+        inp.border_title = "Executing plan..."

@@ -1,8 +1,17 @@
 import argparse
+import os
 import sys
+from datetime import date
 
+from opcode_cli.agent.agent import Agent
+from opcode_cli.agent.plan_mode import PlanMode
 from opcode_cli.config import load_config
-from opcode_cli.controller import ChatController
+from opcode_cli.prompt import (
+    PlanModeInjector,
+    SystemPromptBuilder,
+    build_environment_context,
+    get_fixed_modules,
+)
 from opcode_cli.provider.manager import ProviderManager
 from opcode_cli.tools.edit_file import EditFileTool
 from opcode_cli.tools.glob_find import GlobFindTool
@@ -57,8 +66,26 @@ def main() -> None:
     registry.register(GlobFindTool())
     registry.register(GrepSearchTool())
 
-    controller = ChatController(provider, registry, max_iterations=args.max_iterations)
-    app = OpcodeApp(controller)
+    builder = SystemPromptBuilder()
+    builder.register_many(get_fixed_modules())
+    env_context = build_environment_context(
+        workspace=os.getcwd(),
+        os_info=sys.platform,
+        date=date.today().isoformat(),
+        shell=os.environ.get("SHELL", os.environ.get("COMSPEC", "unknown")),
+    )
+    injector = PlanModeInjector()
+
+    agent = Agent(
+        provider, registry,
+        max_iterations=args.max_iterations,
+        builder=builder,
+        injector=injector,
+        env_context=env_context,
+    )
+    plan_mode = PlanMode(registry, injector)
+    agent.set_plan_mode(plan_mode)
+    app = OpcodeApp(agent)
     app.run()
 
 
