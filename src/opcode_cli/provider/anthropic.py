@@ -40,10 +40,27 @@ class AnthropicProvider(BaseProvider):
                 system_text = "\n".join(m.content for m in system_msgs)
 
         chat_messages = [m for m in messages if m.role != "system"]
+        converted = [self._convert_message(m) for m in chat_messages]
+        merged: list[dict] = []
+        for msg in converted:
+            if (
+                merged
+                and msg.get("role") == "user"
+                and isinstance(msg.get("content"), list)
+                and msg["content"]
+                and msg["content"][0].get("type") == "tool_result"
+                and merged[-1].get("role") == "user"
+                and isinstance(merged[-1].get("content"), list)
+                and merged[-1]["content"]
+                and merged[-1]["content"][0].get("type") == "tool_result"
+            ):
+                merged[-1]["content"].extend(msg["content"])
+            else:
+                merged.append(msg)
 
         body: dict = {
             "model": self._model,
-            "messages": [self._convert_message(m) for m in chat_messages],
+            "messages": merged,
             "stream": True,
             "thinking": {
                 "type": "enabled",
