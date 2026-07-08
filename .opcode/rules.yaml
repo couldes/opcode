@@ -1,0 +1,8 @@
+rules:
+  # Sensitive files
+  - deny: "ReadFile(*.env*)"
+  - deny: "ReadFile(*.env)"
+  - deny: "ReadFile(*credentials*)"
+  - deny: "ReadFile(*secret*)"
+  - deny: "ReadFile(*id_rsa*)"
+  - deny: "ReadFile(*config.json)"

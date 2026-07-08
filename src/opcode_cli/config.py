@@ -16,6 +16,7 @@ class ProviderConfig:
 class AppConfig:
     providers: list[ProviderConfig]
     default: str
+    mode: str = "default"
 
 
 def find_config_file(path: str | None = None) -> Path:
@@ -71,4 +72,6 @@ def load_config(path: str | None = None) -> AppConfig:
             api_key=rp["api_key"],
         ))
 
-    return AppConfig(providers=providers, default=default)
+    mode = data.get("mode", "default")
+
+    return AppConfig(providers=providers, default=default, mode=mode)
