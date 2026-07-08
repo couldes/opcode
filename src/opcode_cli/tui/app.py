@@ -1,4 +1,5 @@
 import asyncio
+import sys
 
 from textual.app import App, ComposeResult
 from textual.containers import VerticalScroll
@@ -8,6 +9,7 @@ from opcode_cli.agent.agent import Agent
 from opcode_cli.agent.events import (
     DoneEvent,
     ErrorEvent,
+    PermissionPromptEvent,
     TextDelta,
     ThinkingDelta,
     ToolCallStart,
@@ -86,6 +88,9 @@ class OpcodeApp(App):
         self._agent = agent
         self._plan_pending = False
         self._last_response = ""
+        self._permission_decision_event: asyncio.Event | None = None
+        self._permission_decision: str = ""
+        self._waiting_permission = False
 
     def compose(self) -> ComposeResult:
         with VerticalScroll(id="chat", can_focus=False):
@@ -100,6 +105,27 @@ class OpcodeApp(App):
             self._agent.cancel()
             event.prevent_default()
             return
+
+        if getattr(self, "_waiting_permission", False):
+            key = event.key.lower()
+            if key == "y":
+                self._permission_decision = "allow_once"
+                if self._permission_decision_event:
+                    self._permission_decision_event.set()
+                event.prevent_default()
+                return
+            elif key == "s":
+                self._permission_decision = "allow_session"
+                if self._permission_decision_event:
+                    self._permission_decision_event.set()
+                event.prevent_default()
+                return
+            elif key == "n":
+                self._permission_decision = "deny"
+                if self._permission_decision_event:
+                    self._permission_decision_event.set()
+                event.prevent_default()
+                return
 
         inp = self.query_one("#user-input", TextArea)
         if not inp.has_focus and not inp.disabled and event.character:
@@ -214,6 +240,20 @@ class OpcodeApp(App):
                     if w is not None:
                         icon = "OK" if agent_event.result.success else "FAIL"
                         w.update(f"[dim]{icon} {agent_event.name}[/dim]")
+                elif isinstance(agent_event, PermissionPromptEvent):
+                    if not sys.stdin.isatty():
+                        self._agent.respond_to_permission("deny")
+                        continue
+                    prompt = Static(
+                        f"[bold yellow][?][/bold yellow] Allow {agent_event.tool_name}({agent_event.args_str})? "
+                        "[bold](y)[/bold]es this time / [bold](s)[/bold]ession / [bold](n)[/bold]o",
+                        classes="tool-status",
+                    )
+                    await chat.mount(prompt)
+                    chat.scroll_end(animate=False)
+                    decision = await self._wait_for_permission_choice()
+                    await prompt.remove()
+                    self._agent.respond_to_permission(decision)
                 elif isinstance(agent_event, DoneEvent):
                     reason = agent_event.finish_reason
                     if reason == "cancelled":
@@ -249,6 +289,21 @@ class OpcodeApp(App):
             self._last_response = buf
             inp.disabled = False
             inp.focus()
+
+    async def _wait_for_permission_choice(self) -> str:
+        self._permission_decision_event = asyncio.Event()
+        self._permission_decision = ""
+        self._waiting_permission = True
+        try:
+            await asyncio.wait_for(
+                self._permission_decision_event.wait(),
+                timeout=60.0,
+            )
+        except asyncio.TimeoutError:
+            self._permission_decision = "deny"
+        self._waiting_permission = False
+        self._permission_decision_event = None
+        return self._permission_decision
 
     def _enter_plan_mode(self) -> None:
         plan_mode = self._agent.plan_mode

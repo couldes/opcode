@@ -6,6 +6,13 @@ from datetime import date
 from opcode_cli.agent.agent import Agent
 from opcode_cli.agent.plan_mode import PlanMode
 from opcode_cli.config import load_config
+from opcode_cli.permission import (
+    PermissionChecker,
+    PermissionMode,
+    load_rule_file,
+    merge_rulesets,
+    resolve_rule_paths,
+)
 from opcode_cli.prompt import (
     PlanModeInjector,
     SystemPromptBuilder,
@@ -43,6 +50,12 @@ def main() -> None:
         default=25,
         help="max tool-calling iterations per turn (default: 25)",
     )
+    parser.add_argument(
+        "--mode",
+        default=None,
+        choices=["strict", "default", "accept-edits", "permissive"],
+        help="permission mode (default: from config or 'default')",
+    )
     args = parser.parse_args()
 
     try:
@@ -66,6 +79,25 @@ def main() -> None:
     registry.register(GlobFindTool())
     registry.register(GrepSearchTool())
 
+    mode_str = args.mode if args.mode else config.mode
+    mode = PermissionMode(mode_str)
+
+    project_root = os.getcwd()
+    project_rules_path, user_rules_path = resolve_rule_paths(project_root)
+    user_rules = load_rule_file(user_rules_path) if user_rules_path else None
+    project_rules = load_rule_file(project_rules_path) if project_rules_path else None
+
+    base_rules = merge_rulesets(
+        *([project_rules] if project_rules else []),
+        *([user_rules] if user_rules else []),
+    ) if (user_rules or project_rules) else None
+
+    permission_checker = PermissionChecker(
+        project_root=project_root,
+        mode=mode,
+        base_rules=base_rules,
+    )
+
     builder = SystemPromptBuilder()
     builder.register_many(get_fixed_modules())
     env_context = build_environment_context(
@@ -82,6 +114,7 @@ def main() -> None:
         builder=builder,
         injector=injector,
         env_context=env_context,
+        permission_checker=permission_checker,
     )
     plan_mode = PlanMode(registry, injector)
     agent.set_plan_mode(plan_mode)

@@ -8,17 +8,21 @@ from opcode_cli.agent.events import (
     CacheMetricsEvent,
     DoneEvent,
     ErrorEvent,
+    PermissionPromptEvent,
     ProgressEvent,
     TokenUsageEvent,
+    ToolResultEvent,
 )
 from opcode_cli.agent.plan_mode import PlanMode
+from opcode_cli.permission.checker import PermissionChecker
+from opcode_cli.permission.rules import Rule
 from opcode_cli.prompt.builder import SystemPromptBuilder
 from opcode_cli.prompt.injector import PlanModeInjector
 from opcode_cli.prompt.reminder import system_reminder
 from opcode_cli.prompt.tracker import CacheTracker
 from opcode_cli.provider.anthropic import AnthropicProvider
-from opcode_cli.provider.base import BaseProvider, Message
-from opcode_cli.tools.base import BaseTool
+from opcode_cli.provider.base import BaseProvider, Message, ToolCall
+from opcode_cli.tools.base import BaseTool, ToolResult
 from opcode_cli.tools.registry import ToolRegistry
 
 
@@ -32,6 +36,7 @@ class Agent:
         builder: SystemPromptBuilder | None = None,
         injector: PlanModeInjector | None = None,
         env_context: str = "",
+        permission_checker: PermissionChecker | None = None,
     ) -> None:
         self._provider = provider
         self._registry = registry
@@ -43,6 +48,9 @@ class Agent:
         self._env_context = env_context
         self._tracker = CacheTracker()
         self._cancelled = asyncio.Event()
+        self._permission_checker = permission_checker
+        self._permission_response: asyncio.Event | None = None
+        self._permission_decision: str = ""
         self.messages: list[Message] = []
 
     @property
@@ -65,6 +73,11 @@ class Agent:
 
     def set_plan_mode(self, plan_mode: PlanMode | None) -> None:
         self._plan_mode = plan_mode
+
+    def respond_to_permission(self, decision: str) -> None:
+        self._permission_decision = decision
+        if self._permission_response:
+            self._permission_response.set()
 
     async def run(self, user_input: str) -> AsyncIterator[AgentEvent]:
         if self._cancelled.is_set():
@@ -147,23 +160,79 @@ class Agent:
                 tool_calls=tool_calls,
             ))
 
-            batcher = ToolBatcher(self._registry)
-            async for event in batcher.execute(tool_calls):
-                yield event
-                self.messages.append(Message(
-                    role="tool",
-                    content=event.result.content
-                    if event.result.success
-                    else f"Error: {event.result.error}",
-                    tool_call_id=event.tool_id,
-                    name=event.name,
-                ))
+            allowed_calls: list[ToolCall] = []
+            for tc in tool_calls:
+                if self._permission_checker is None:
+                    allowed_calls.append(tc)
+                    continue
 
-            if self._plan_mode and self._plan_mode.in_plan:
-                yield DoneEvent(
-                    finish_reason="stop", content=collector.content
-                )
-                return
+                result = self._permission_checker.check(tc)
+                if result == "allow":
+                    allowed_calls.append(tc)
+                elif result == "deny":
+                    self.messages.append(Message(
+                        role="tool",
+                        content="Error: blocked by permission policy",
+                        tool_call_id=tc.id,
+                        name=tc.name,
+                    ))
+                    yield ToolResultEvent(
+                        tool_id=tc.id, name=tc.name,
+                        result=ToolResult(success=False, content="", error="blocked by permission policy"),
+                    )
+                else:  # ask_user
+                    from opcode_cli.permission.rules import _serialize_args
+                    yield PermissionPromptEvent(
+                        tool_call_id=tc.id,
+                        tool_name=tc.name,
+                        args_str=_serialize_args(tc.input),
+                    )
+                    self._permission_response = asyncio.Event()
+                    self._permission_decision = ""
+                    try:
+                        await asyncio.wait_for(
+                            self._permission_response.wait(),
+                            timeout=60.0,
+                        )
+                    except asyncio.TimeoutError:
+                        self._permission_decision = "deny"
+                    self._permission_response = None
+
+                    if self._permission_decision == "deny":
+                        self.messages.append(Message(
+                            role="tool",
+                            content="Error: denied by user",
+                            tool_call_id=tc.id,
+                            name=tc.name,
+                        ))
+                        yield ToolResultEvent(
+                            tool_id=tc.id, name=tc.name,
+                            result=ToolResult(success=False, content="", error="denied by user"),
+                        )
+                    else:
+                        allowed_calls.append(tc)
+                        if self._permission_decision == "allow_session":
+                            if self._permission_checker is not None:
+                                self._permission_checker.add_session_rule(
+                                    Rule(
+                                        tool_name=tc.name,
+                                        pattern=_serialize_args(tc.input),
+                                        action="allow",
+                                    )
+                                )
+
+            if allowed_calls:
+                batcher = ToolBatcher(self._registry)
+                async for event in batcher.execute(allowed_calls):
+                    yield event
+                    self.messages.append(Message(
+                        role="tool",
+                        content=event.result.content
+                        if event.result.success
+                        else f"Error: {event.result.error}",
+                        tool_call_id=event.tool_id,
+                        name=event.name,
+                    ))
 
         yield DoneEvent(finish_reason="max_iterations")
 

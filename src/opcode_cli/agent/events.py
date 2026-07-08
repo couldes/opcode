@@ -62,6 +62,13 @@ class CacheMetricsEvent:
     input_tokens: int
 
 
+@dataclass
+class PermissionPromptEvent:
+    tool_call_id: str
+    tool_name: str
+    args_str: str
+
+
 AgentEvent = (
     TextDelta
     | ThinkingDelta
@@ -73,4 +80,5 @@ AgentEvent = (
     | DoneEvent
     | ErrorEvent
     | CacheMetricsEvent
+    | PermissionPromptEvent
 )
