@@ -6,6 +6,7 @@ from datetime import date
 from opcode_cli.agent.agent import Agent
 from opcode_cli.agent.plan_mode import PlanMode
 from opcode_cli.config import load_config
+from opcode_cli.mcp import MCPServerManager, load_mcp_config
 from opcode_cli.permission import (
     PermissionChecker,
     PermissionMode,
@@ -96,7 +97,11 @@ def main() -> None:
         project_root=project_root,
         mode=mode,
         base_rules=base_rules,
+        registry=registry,
     )
+
+    mcp_config = load_mcp_config(project_root=project_root)
+    mcp_manager = MCPServerManager(mcp_config) if mcp_config.servers else None
 
     builder = SystemPromptBuilder()
     builder.register_many(get_fixed_modules())
@@ -115,6 +120,7 @@ def main() -> None:
         injector=injector,
         env_context=env_context,
         permission_checker=permission_checker,
+        mcp_manager=mcp_manager,
     )
     plan_mode = PlanMode(registry, injector)
     agent.set_plan_mode(plan_mode)

@@ -37,6 +37,7 @@ class Agent:
         injector: PlanModeInjector | None = None,
         env_context: str = "",
         permission_checker: PermissionChecker | None = None,
+        mcp_manager: object | None = None,
     ) -> None:
         self._provider = provider
         self._registry = registry
@@ -49,6 +50,7 @@ class Agent:
         self._tracker = CacheTracker()
         self._cancelled = asyncio.Event()
         self._permission_checker = permission_checker
+        self._mcp_manager = mcp_manager
         self._permission_response: asyncio.Event | None = None
         self._permission_decision: str = ""
         self.messages: list[Message] = []
@@ -94,6 +96,12 @@ class Agent:
                 return
 
             yield ProgressEvent(iteration=iteration, max_iterations=self._max_iterations)
+
+            if self._mcp_manager and iteration == 1:
+                try:
+                    await self._mcp_manager.ensure_registered(self._registry)
+                except Exception as e:
+                    yield ErrorEvent(message=f"MCP init error: {e}")
 
             tools = self._build_tools()
 
