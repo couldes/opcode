@@ -17,11 +17,13 @@ class PermissionChecker:
         mode: PermissionMode,
         base_rules: RuleSet | None = None,
         session_rules: RuleSet | None = None,
+        registry: object | None = None,
     ) -> None:
         self._project_root = project_root
         self._mode = mode
         self._base_rules = base_rules or RuleSet()
         self._session_rules = session_rules or RuleSet()
+        self._registry = registry
 
     def check(self, tool_call: ToolCall) -> str:
         """Run L1→L4 checks. Returns 'allow', 'deny', or 'ask_user'."""
@@ -57,6 +59,15 @@ class PermissionChecker:
         result = self._base_rules.match(tool_name, args_str)
         if result is not None:
             return result
+
+        # L3.5: read-only tools auto-allow
+        if self._registry is not None:
+            try:
+                tool = self._registry.get(tool_name)
+                if tool.read_only:
+                    return "allow"
+            except KeyError:
+                pass
 
         # L4: mode fallback
         return mode_fallback(self._mode, tool_name)
