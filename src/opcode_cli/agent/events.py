@@ -69,6 +69,21 @@ class PermissionPromptEvent:
     args_str: str
 
 
+@dataclass
+class OffloadEvent:
+    count: int
+
+@dataclass
+class SummarizeEvent:
+    summarized_count: int
+    total_before: int
+    total_after: int
+
+@dataclass
+class CompressionSkippedEvent:
+    reason: str  # "broken" | "too_few_messages" | "under_threshold"
+
+
 AgentEvent = (
     TextDelta
     | ThinkingDelta
@@ -81,4 +96,7 @@ AgentEvent = (
     | ErrorEvent
     | CacheMetricsEvent
     | PermissionPromptEvent
+    | OffloadEvent
+    | SummarizeEvent
+    | CompressionSkippedEvent
 )

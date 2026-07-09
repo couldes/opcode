@@ -6,10 +6,13 @@ from opcode_cli.agent.collector import StreamCollector
 from opcode_cli.agent.events import (
     AgentEvent,
     CacheMetricsEvent,
+    CompressionSkippedEvent,
     DoneEvent,
     ErrorEvent,
+    OffloadEvent,
     PermissionPromptEvent,
     ProgressEvent,
+    SummarizeEvent,
     TokenUsageEvent,
     ToolResultEvent,
 )
@@ -21,6 +24,7 @@ from opcode_cli.prompt.injector import PlanModeInjector
 from opcode_cli.prompt.reminder import system_reminder
 from opcode_cli.prompt.tracker import CacheTracker
 from opcode_cli.provider.anthropic import AnthropicProvider
+from opcode_cli.context.manager import CompressionDecision, ContextManager
 from opcode_cli.provider.base import BaseProvider, Message, ToolCall
 from opcode_cli.tools.base import BaseTool, ToolResult
 from opcode_cli.tools.registry import ToolRegistry
@@ -38,6 +42,7 @@ class Agent:
         env_context: str = "",
         permission_checker: PermissionChecker | None = None,
         mcp_manager: object | None = None,
+        context_manager: ContextManager | None = None,
     ) -> None:
         self._provider = provider
         self._registry = registry
@@ -51,6 +56,7 @@ class Agent:
         self._cancelled = asyncio.Event()
         self._permission_checker = permission_checker
         self._mcp_manager = mcp_manager
+        self._context_manager = context_manager
         self._permission_response: asyncio.Event | None = None
         self._permission_decision: str = ""
         self.messages: list[Message] = []
@@ -81,6 +87,41 @@ class Agent:
         if self._permission_response:
             self._permission_response.set()
 
+    async def _run_context_checks(self) -> AsyncIterator[AgentEvent]:
+        """在 API 请求前执行上下文压缩检查。
+
+        放在 ProgressEvent 之前执行，确保每次迭代 token 预算在可控范围。
+        """
+        if not self._context_manager:
+            return
+
+        decision = await self._context_manager.before_request(
+            self.messages, provider=self._provider, manual=False
+        )
+
+        if decision.did_offload:
+            yield OffloadEvent(count=decision.offloaded_count)
+        if decision.summary_broken:
+            yield CompressionSkippedEvent(reason="broken")
+        if decision.did_summarize:
+            after = self._context_manager.estimator.estimate(self.messages)
+            yield SummarizeEvent(
+                summarized_count=decision.summarized_count,
+                total_before=decision.total_tokens,
+                total_after=after,
+            )
+
+    async def compact_manual(self) -> CompressionDecision | None:
+        """用户手动触发压缩（/compact 命令）。
+
+        安全余量收窄到 3K。
+        """
+        if not self._context_manager:
+            return None
+        return await self._context_manager.before_request(
+            self.messages, provider=self._provider, manual=True
+        )
+
     async def run(self, user_input: str) -> AsyncIterator[AgentEvent]:
         if self._cancelled.is_set():
             yield DoneEvent(finish_reason="cancelled")
@@ -94,6 +135,10 @@ class Agent:
             if self._cancelled.is_set():
                 yield DoneEvent(finish_reason="cancelled")
                 return
+
+            # API 请求前执行上下文压缩检查
+            async for ctx_event in self._run_context_checks():
+                yield ctx_event
 
             yield ProgressEvent(iteration=iteration, max_iterations=self._max_iterations)
 
@@ -139,6 +184,10 @@ class Agent:
                         cache_read_input_tokens=metrics.cache_read_input_tokens,
                         input_tokens=metrics.input_tokens,
                     )
+                    if self._context_manager and usage.get("input_tokens"):
+                        self._context_manager.update_anchor(
+                            usage["input_tokens"], self.messages,
+                        )
 
             tool_calls = collector.tool_calls
 

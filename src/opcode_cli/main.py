@@ -1,10 +1,12 @@
 import argparse
 import os
 import sys
+import time
 from datetime import date
 
 from opcode_cli.agent.agent import Agent
 from opcode_cli.agent.plan_mode import PlanMode
+from opcode_cli.context import ContextManager
 from opcode_cli.config import load_config
 from opcode_cli.mcp import MCPServerManager, load_mcp_config
 from opcode_cli.permission import (
@@ -113,6 +115,20 @@ def main() -> None:
     )
     injector = PlanModeInjector()
 
+    # 确定 context window
+    provider_name = args.provider or config.default
+    provider_cfg = next(
+        (p for p in config.providers if p.name == provider_name), None
+    )
+    protocol = provider_cfg.protocol.lower() if provider_cfg else ""
+    context_window = 200000 if protocol == "anthropic" else 128000
+
+    context_mgr = ContextManager(
+        project_root=os.getcwd(),
+        session_id=str(int(time.time())),
+        context_window=context_window,
+    )
+
     agent = Agent(
         provider, registry,
         max_iterations=args.max_iterations,
@@ -121,6 +137,7 @@ def main() -> None:
         env_context=env_context,
         permission_checker=permission_checker,
         mcp_manager=mcp_manager,
+        context_manager=context_mgr,
     )
     plan_mode = PlanMode(registry, injector)
     agent.set_plan_mode(plan_mode)
