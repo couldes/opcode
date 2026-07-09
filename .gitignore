@@ -44,6 +44,7 @@ opcode.yaml
 
 # Claude
 .claude/
+CLAUDE.md
 
 # Project (not version controlled)
 spec.md
@@ -51,3 +52,4 @@ plan.md
 task.md
 checklist.md
 tests/
+experience/
