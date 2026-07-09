@@ -7,9 +7,12 @@ from textual.widgets import Static, TextArea
 
 from opcode_cli.agent.agent import Agent
 from opcode_cli.agent.events import (
+    CompressionSkippedEvent,
     DoneEvent,
     ErrorEvent,
+    OffloadEvent,
     PermissionPromptEvent,
+    SummarizeEvent,
     TextDelta,
     ThinkingDelta,
     ToolCallStart,
@@ -34,6 +37,27 @@ class ThinkingToggle(Static):
         else:
             self._content.add_class("hidden")
             self.update("[dim][+] Thinking (click to expand)[/dim]")
+
+
+class ChatInput(TextArea):
+    """Enter 提交，Shift+Enter 换行。"""
+
+    BINDINGS = [
+        ("shift+enter", "insert_newline", "New line"),
+    ]
+
+    async def _on_key(self, event) -> None:
+        if event.key == "enter":
+            event.stop()
+            event.prevent_default()
+            action_submit = getattr(self.app, "action_submit_input", None)
+            if action_submit is not None:
+                action_submit()
+            return
+        await super()._on_key(event)
+
+    def action_insert_newline(self) -> None:
+        self.insert("\n")
 
 
 class OpcodeApp(App):
@@ -79,8 +103,9 @@ class OpcodeApp(App):
     """
 
     BINDINGS = [
+        ("ctrl+c", "quit", "Quit"),
         ("ctrl+x", "copy_response", "Copy last response"),
-        ("ctrl+enter", "submit_input", "Send message"),
+        ("enter", "submit_input", "Send"),
     ]
 
     def __init__(self, agent: Agent):
@@ -94,16 +119,16 @@ class OpcodeApp(App):
 
     def compose(self) -> ComposeResult:
         with VerticalScroll(id="chat", can_focus=False):
-            yield Static("Welcome to opcode. Type /exit to quit.\nPress Ctrl+Enter to send, Ctrl+X to copy.")
-        yield TextArea(id="user-input")
+            yield Static("Welcome to opcode. Type /exit to quit.\nPress Enter to send, Shift+Enter for new line.")
+        yield ChatInput(id="user-input")
 
     def on_mount(self) -> None:
-        self.query_one("#user-input", TextArea).focus()
+        self.query_one("#user-input", ChatInput).focus()
 
-    def on_key(self, event) -> None:
+    def _on_key(self, event) -> None:
         if event.key == "escape":
             self._agent.cancel()
-            event.prevent_default()
+            event.stop()
             return
 
         if getattr(self, "_waiting_permission", False):
@@ -112,26 +137,26 @@ class OpcodeApp(App):
                 self._permission_decision = "allow_once"
                 if self._permission_decision_event:
                     self._permission_decision_event.set()
-                event.prevent_default()
+                event.stop()
                 return
             elif key == "s":
                 self._permission_decision = "allow_session"
                 if self._permission_decision_event:
                     self._permission_decision_event.set()
-                event.prevent_default()
+                event.stop()
                 return
             elif key == "n":
                 self._permission_decision = "deny"
                 if self._permission_decision_event:
                     self._permission_decision_event.set()
-                event.prevent_default()
+                event.stop()
                 return
 
-        inp = self.query_one("#user-input", TextArea)
+        inp = self.query_one("#user-input", ChatInput)
         if not inp.has_focus and not inp.disabled and event.character:
             inp.focus()
             inp.insert(event.character)
-            event.prevent_default()
+            event.stop()
 
     def action_copy_response(self) -> None:
         if self._last_response:
@@ -139,19 +164,38 @@ class OpcodeApp(App):
             self.notify("Copied to clipboard", timeout=2)
 
     def action_submit_input(self) -> None:
-        inp = self.query_one("#user-input", TextArea)
+        inp = self.query_one("#user-input", ChatInput)
         value = inp.text.strip()
         if not value:
             return
         inp.text = ""
         asyncio.ensure_future(self._process_input(value))
 
+    async def _cleanup_mcp(self) -> None:
+        """关闭 MCP 连接，避免退出时报 async generator 错误。"""
+        mcp_manager = getattr(self._agent, "_mcp_manager", None)
+        if mcp_manager is not None:
+            try:
+                await mcp_manager.disconnect_all()
+            except Exception:
+                pass
+
+    def _on_exit_app(self) -> None:
+        """Ctrl+C 退出时清理 MCP 资源。"""
+        mcp_manager = getattr(self._agent, "_mcp_manager", None)
+        if mcp_manager is not None:
+            try:
+                asyncio.ensure_future(mcp_manager.disconnect_all())
+            except Exception:
+                pass
+
     async def _process_input(self, value: str) -> None:
         cmd = value.lower()
-        inp = self.query_one("#user-input", TextArea)
+        inp = self.query_one("#user-input", ChatInput)
         chat = self.query_one("#chat", VerticalScroll)
 
         if cmd in ("/exit", "/quit"):
+            await self._cleanup_mcp()
             self.exit()
             return
 
@@ -179,6 +223,15 @@ class OpcodeApp(App):
             inp.focus()
             return
 
+        if cmd == "/compression":
+            await chat.mount(Static(
+                "[dim]-- compression: offloaded results --[/dim]",
+                classes="tool-status",
+            ))
+            chat.scroll_end(animate=False)
+            inp.focus()
+            return
+
         if cmd == "/do":
             self._enter_do_mode()
             await chat.mount(Static(
@@ -186,6 +239,11 @@ class OpcodeApp(App):
                 classes="tool-status",
             ))
             chat.scroll_end(animate=False)
+            inp.focus()
+            return
+
+        if cmd == "/compact":
+            await self._compact_action()
             inp.focus()
             return
 
@@ -251,7 +309,9 @@ class OpcodeApp(App):
                     )
                     await chat.mount(prompt)
                     chat.scroll_end(animate=False)
+                    inp.blur()  # 确保 TextArea 不拦截 y/s/n 按键
                     decision = await self._wait_for_permission_choice()
+                    inp.focus()
                     await prompt.remove()
                     self._agent.respond_to_permission(decision)
                 elif isinstance(agent_event, DoneEvent):
@@ -268,6 +328,23 @@ class OpcodeApp(App):
                         pass
                     elif agent_event.content:
                         assistant.update(f"[bold green]opcode[/bold green]\n{agent_event.content}")
+                elif isinstance(agent_event, OffloadEvent):
+                    await chat.mount(Static(
+                        f"[dim]Offloaded {agent_event.count} tool results to disk[/dim]",
+                        classes="tool-status",
+                    ))
+                elif isinstance(agent_event, SummarizeEvent):
+                    await chat.mount(Static(
+                        f"[dim]Summarized {agent_event.summarized_count} messages "
+                        f"({agent_event.total_before // 1000}K → {agent_event.total_after // 1000}K tokens)[/dim]",
+                        classes="tool-status",
+                    ))
+                elif isinstance(agent_event, CompressionSkippedEvent):
+                    if agent_event.reason == "broken":
+                        await chat.mount(Static(
+                            "[dim]Compression skipped: summarizer broken[/dim]",
+                            classes="tool-status",
+                        ))
                 elif isinstance(agent_event, ErrorEvent):
                     assistant.update(f"[bold green]opcode[/bold green]\n[bold red]Error: {agent_event.message}[/bold red]")
                     error_occurred = True
@@ -305,13 +382,44 @@ class OpcodeApp(App):
         self._permission_decision_event = None
         return self._permission_decision
 
+    async def _compact_action(self) -> None:
+        chat = self.query_one("#chat", VerticalScroll)
+        decision = await self._agent.compact_manual()
+        if decision is None:
+            await chat.mount(Static(
+                "[dim]Compression: context manager not available[/dim]",
+                classes="tool-status",
+            ))
+            chat.scroll_end(animate=False)
+            return
+
+        parts = []
+        if decision.did_offload:
+            parts.append(f"offloaded {decision.offloaded_count} tool results")
+        if decision.did_summarize:
+            after = self._agent._context_manager.estimator.estimate(self._agent.messages)
+            parts.append(
+                f"summarized {decision.summarized_count} messages "
+                f"({decision.total_tokens // 1000}K → {after // 1000}K tokens)"
+            )
+        if decision.summary_broken:
+            parts.append("summarizer broken after 3 failures")
+        if not parts:
+            parts.append("no compression needed")
+
+        await chat.mount(Static(
+            f"[dim]Compression: {', '.join(parts)}[/dim]",
+            classes="tool-status",
+        ))
+        chat.scroll_end(animate=False)
+
     def _enter_plan_mode(self) -> None:
         plan_mode = self._agent.plan_mode
         if plan_mode is None:
             return
         plan_mode.start_plan()
         self._plan_pending = True
-        inp = self.query_one("#user-input", TextArea)
+        inp = self.query_one("#user-input", ChatInput)
         inp.text = ""
         inp.border_title = "Describe your task for planning..."
 
@@ -321,6 +429,6 @@ class OpcodeApp(App):
             return
         plan_mode.start_do()
         self._plan_pending = False
-        inp = self.query_one("#user-input", TextArea)
+        inp = self.query_one("#user-input", ChatInput)
         inp.text = ""
         inp.border_title = "Executing plan..."
