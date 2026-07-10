@@ -11,3 +11,4 @@ class CommandDeps:
     permission_checker: object | None  # PermissionChecker instance
     project_memory_dir: Path
     user_memory_dir: Path
+    skills_manager: object | None = None  # SkillsManager instance

@@ -8,6 +8,7 @@ from opcode_cli.commands.builtin.permission_cmd import make_permission_command
 from opcode_cli.commands.builtin.plan_cmd import make_plan_command
 from opcode_cli.commands.builtin.review_cmd import make_review_command
 from opcode_cli.commands.builtin.session_cmd import make_session_command
+from opcode_cli.commands.builtin.skill_cmd import make_skill_command
 from opcode_cli.commands.builtin.status_cmd import make_status_command
 from opcode_cli.commands.registry import CommandRegistry
 
@@ -22,4 +23,6 @@ def register_all(registry: CommandRegistry, deps: CommandDeps) -> None:
     registry.register(make_memory_command(deps))
     registry.register(make_permission_command(deps))
     registry.register(make_status_command(deps))
-    registry.register(make_review_command(deps))
+    registry.register(make_skill_command(deps))
+    # /review is handled by the skill system
+    # registry.register(make_review_command(deps))
