@@ -13,10 +13,12 @@ class SystemPromptBuilder:
         self,
         instructions_module: PromptModule | None = None,
         memory_module: PromptModule | None = None,
+        skills_module: PromptModule | None = None,
     ) -> None:
         self._modules: list[PromptModule] = []
         self._instructions_module = instructions_module
         self._memory_module = memory_module
+        self._skills_module = skills_module
 
     @property
     def modules(self) -> list[PromptModule]:
@@ -45,6 +47,10 @@ class SystemPromptBuilder:
         # 环境信息
         if env_context:
             parts.append(env_context)
+
+        # 技能索引（环境信息之后，记忆模块之前）
+        if self._skills_module and self._skills_module.content:
+            parts.append(self._skills_module.content)
 
         # 记忆模块（最后）
         if self._memory_module and self._memory_module.content:

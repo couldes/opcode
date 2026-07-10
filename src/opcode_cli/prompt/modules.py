@@ -106,6 +106,28 @@ def get_memory_module(memory_index_text: str) -> PromptModule | None:
     )
 
 
+def get_skills_module(skills_index_text: str) -> PromptModule | None:
+    """将技能索引内容包装为 PromptModule（含意图识别指引）。"""
+    if not skills_index_text.strip():
+        return None
+    content = (
+        "<available-skills>\n"
+        f"{skills_index_text}\n"
+        "</available-skills>\n\n"
+        "# Skill Auto-Activation\n"
+        "Available skills are listed above. When the user's request matches "
+        "a skill's purpose, automatically activate it:\n"
+        "1. Call the `load_skill` tool with the skill's name.\n"
+        "2. Follow the skill's instructions once activated.\n"
+        "3. If no skill matches, proceed normally without activating any skill."
+    )
+    return PromptModule(
+        name="available_skills",
+        priority=90,
+        content=content,
+    )
+
+
 def get_fixed_modules() -> list[PromptModule]:
     return [
         _IDENTITY,

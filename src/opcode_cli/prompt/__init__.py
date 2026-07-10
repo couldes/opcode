@@ -5,6 +5,7 @@ from opcode_cli.prompt.modules import (
     get_fixed_modules,
     get_instructions_module,
     get_memory_module,
+    get_skills_module,
 )
 from opcode_cli.prompt.reminder import system_reminder
 from opcode_cli.prompt.tracker import CacheMetrics, CacheTracker
@@ -17,6 +18,7 @@ __all__ = [
     "get_fixed_modules",
     "get_instructions_module",
     "get_memory_module",
+    "get_skills_module",
     "system_reminder",
     "CacheMetrics",
     "CacheTracker",
