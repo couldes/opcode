@@ -8,8 +8,8 @@ from textual.widgets import Static, TextArea
 from pathlib import Path
 
 from opcode_cli.agent.agent import Agent
+from opcode_cli.commands import CommandRegistry, get_completions
 from opcode_cli.agent.events import (
-
     CompressionSkippedEvent,
     DoneEvent,
     ErrorEvent,
@@ -57,10 +57,26 @@ class ChatInput(TextArea):
             if action_submit is not None:
                 action_submit()
             return
+        if event.key == "tab":
+            text = self.text
+            if text.startswith("/"):
+                event.stop()
+                event.prevent_default()
+                handler = getattr(self.app, "handle_tab_completion", None)
+                if handler is not None:
+                    handler(text, self.cursor_location)
+                return
         await super()._on_key(event)
 
     def action_insert_newline(self) -> None:
         self.insert("\n")
+
+
+class StatusBar(Static):
+    """显示当前模式标记：[DEFAULT] / [PLAN]"""
+
+    def __init__(self) -> None:
+        super().__init__("[reverse] DEFAULT [/reverse]", id="status-bar")
 
 
 class OpcodeApp(App):
@@ -95,6 +111,11 @@ class OpcodeApp(App):
     .tool-status {
         margin: 0 0 0 0;
     }
+    #status-bar {
+        dock: bottom;
+        height: 1;
+        margin: 0 1;
+    }
     #user-input {
         dock: bottom;
         margin: 0 1;
@@ -111,9 +132,10 @@ class OpcodeApp(App):
         ("enter", "submit_input", "Send"),
     ]
 
-    def __init__(self, agent: Agent):
+    def __init__(self, agent: Agent, command_registry: CommandRegistry | None = None):
         super().__init__()
         self._agent = agent
+        self._command_registry = command_registry
         self._plan_pending = False
         self._last_response = ""
         self._permission_decision_event: asyncio.Event | None = None
@@ -122,7 +144,8 @@ class OpcodeApp(App):
 
     def compose(self) -> ComposeResult:
         with VerticalScroll(id="chat", can_focus=False):
-            yield Static("Welcome to opcode. Type /exit to quit.\nPress Enter to send, Shift+Enter for new line.")
+            yield Static("Welcome to opcode. Type /help for commands, /exit to quit.\nPress Enter to send, Shift+Enter for new line.")
+        yield StatusBar()
         yield ChatInput(id="user-input")
 
     def on_mount(self) -> None:
@@ -173,6 +196,43 @@ class OpcodeApp(App):
             return
         inp.text = ""
         asyncio.ensure_future(self._process_input(value))
+
+    def _update_status_bar(self) -> None:
+        mode = self.get_mode()
+        try:
+            bar = self.query_one("#status-bar", Static)
+            bar.update(f"[reverse] {mode} [/reverse]")
+        except Exception:
+            pass
+
+    def handle_tab_completion(self, text: str, cursor_pos: tuple[int, int]) -> None:
+        if self._command_registry is None:
+            return
+        col = cursor_pos[1]
+        after_slash = text[1:col].lower()
+        if " " in after_slash:
+            return
+
+        matches = get_completions(after_slash, self._command_registry)
+        chat = self.query_one("#chat", VerticalScroll)
+        inp = self.query_one("#user-input", ChatInput)
+
+        if len(matches) == 1:
+            rest = text[col:]
+            inp.text = f"/{matches[0]} {rest}"
+            inp.cursor_location = (0, len(matches[0]) + 2)
+        elif len(matches) > 1:
+            names = "  ".join(f"/{m}" for m in matches)
+            asyncio.ensure_future(
+                chat.mount(Static(f"[dim]{names}[/dim]", classes="tool-status"))
+            )
+            asyncio.ensure_future(chat.scroll_end(animate=False))
+
+    def get_mode(self) -> str:
+        plan_mode = self._agent.plan_mode
+        if plan_mode and plan_mode.in_plan:
+            return "PLAN"
+        return "DEFAULT"
 
     async def _cleanup_mcp(self) -> None:
         """关闭 MCP 连接，避免退出时报 async generator 错误。"""
@@ -555,6 +615,7 @@ class OpcodeApp(App):
         inp = self.query_one("#user-input", ChatInput)
         inp.text = ""
         inp.border_title = "Describe your task for planning..."
+        self._update_status_bar()
 
     def _enter_do_mode(self) -> None:
         plan_mode = self._agent.plan_mode
@@ -565,3 +626,4 @@ class OpcodeApp(App):
         inp = self.query_one("#user-input", ChatInput)
         inp.text = ""
         inp.border_title = "Executing plan..."
+        self._update_status_bar()
