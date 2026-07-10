@@ -18,7 +18,7 @@ class MCPToolAdapter(BaseTool):
         self.name = f"{server_name}__{tool_name}"
         self.description = description
         self.parameters = parameters
-        self.read_only = True
+        self.read_only = False
         self._server_name = server_name
         self._tool_name = tool_name
         self._session_provider = session_provider
