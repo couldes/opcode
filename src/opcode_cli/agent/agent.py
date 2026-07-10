@@ -45,6 +45,7 @@ class Agent:
         context_manager: ContextManager | None = None,
         archiver: object | None = None,
         memory_updater: object | None = None,
+        skills_manager: object | None = None,
     ) -> None:
         self._provider = provider
         self._registry = registry
@@ -61,6 +62,7 @@ class Agent:
         self._context_manager = context_manager
         self._archiver = archiver
         self._memory_updater = memory_updater
+        self._skills_manager = skills_manager
         self._permission_response: asyncio.Event | None = None
         self._permission_decision: str = ""
         self.messages: list[Message] = []
@@ -188,6 +190,10 @@ class Agent:
                 instruction = self._plan_mode.get_instruction(iteration)
                 if instruction:
                     chat_messages.append(system_reminder(instruction))
+            if self._skills_manager:
+                skills_content = self._skills_manager.get_active_skills_content()
+                if skills_content:
+                    chat_messages.append(system_reminder(skills_content))
 
             collector = StreamCollector()
             try:
@@ -347,6 +353,14 @@ class Agent:
             tools = self._plan_mode.get_tools()
         else:
             tools = self._registry.list_tools()
+
+        if self._skills_manager:
+            whitelist = self._skills_manager.get_whitelist()
+            if whitelist is not None:
+                tools = [
+                    t for t in tools
+                    if getattr(t, "system_level", False) or t.name in whitelist
+                ]
 
         if not tools:
             return None
