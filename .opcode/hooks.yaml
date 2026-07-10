@@ -1,0 +1,14 @@
+# Hooks
+hooks:
+  # pre_tool_use 拦截写 *.json（reject + on_error 兜底）
+  # 注意：LLM 给的 file_path 通常是绝对路径，glob 的 * 不跨 / 分隔符，
+  # 所以这里用正则按后缀匹配（=~ /\.json$/）而不是 =* "*.json"
+  - name: block-json-write
+    event: tool_pre_execute
+    if:
+      match:
+        tool_name: write_file
+        tool_args.path: /\.json$/
+    action:
+      type: prompt
+      content: "禁止直接写入 JSON 文件，请使用专用工具"
