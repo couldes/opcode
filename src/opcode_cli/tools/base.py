@@ -21,6 +21,7 @@ class BaseTool(ABC):
     description: str = ""
     parameters: dict = {}
     read_only: bool = False
+    system_level: bool = False  # 系统级工具不受白名单约束
 
     @abstractmethod
     async def execute(self, **kwargs) -> ToolResult:

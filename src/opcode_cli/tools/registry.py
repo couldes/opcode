@@ -19,6 +19,10 @@ class ToolRegistry:
             raise KeyError(f"tool not found: '{name}'")
         return self._tools[name]
 
+    def remove(self, name: str) -> None:
+        """从注册表中移除一个工具（不存在时静默忽略）。"""
+        self._tools.pop(name, None)
+
     def list_tools(self) -> list[BaseTool]:
         return list(self._tools.values())
 
