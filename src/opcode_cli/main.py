@@ -6,6 +6,9 @@ from pathlib import Path
 
 from opcode_cli.agent.agent import Agent
 from opcode_cli.agent.plan_mode import PlanMode
+from opcode_cli.commands.builtin import register_all as register_commands
+from opcode_cli.commands.builtin._deps import CommandDeps
+from opcode_cli.commands.registry import CommandRegistry
 from opcode_cli.context import ContextManager
 from opcode_cli.config import load_config
 from opcode_cli.instructions.loader import load as load_instructions
@@ -184,7 +187,19 @@ def main() -> None:
     )
     plan_mode = PlanMode(registry, injector)
     agent.set_plan_mode(plan_mode)
-    app = OpcodeApp(agent)
+
+    # 命令系统初始化
+    command_registry = CommandRegistry()
+    command_deps = CommandDeps(
+        agent=agent,
+        command_registry=command_registry,
+        permission_checker=permission_checker,
+        project_memory_dir=Path(project_root) / ".opcode" / "memory",
+        user_memory_dir=Path.home() / ".opcode" / "memory",
+    )
+    register_commands(command_registry, command_deps)
+
+    app = OpcodeApp(agent, command_registry)
     app.run()
 
 

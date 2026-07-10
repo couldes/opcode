@@ -8,7 +8,7 @@ from textual.widgets import Static, TextArea
 from pathlib import Path
 
 from opcode_cli.agent.agent import Agent
-from opcode_cli.commands import CommandRegistry, get_completions
+from opcode_cli.commands import CommandRegistry, dispatch, get_completions, parse
 from opcode_cli.agent.events import (
     CompressionSkippedEvent,
     DoneEvent,
@@ -253,16 +253,21 @@ class OpcodeApp(App):
                 pass
 
     async def _process_input(self, value: str) -> None:
-        cmd = value.lower()
+        cmd_lower = value.lower().strip()
         inp = self.query_one("#user-input", ChatInput)
-        chat = self.query_one("#chat", VerticalScroll)
 
-        if cmd in ("/exit", "/quit"):
+        # 系统外前置命令（不在 registry 中）
+        if cmd_lower in ("/exit", "/quit"):
             await self._cleanup_mcp()
             self.exit()
             return
 
-        if cmd == "/copy":
+        if cmd_lower == "/cancel":
+            self._agent.cancel()
+            inp.focus()
+            return
+
+        if cmd_lower == "/copy":
             if self._last_response:
                 self.copy_to_clipboard(self._last_response)
                 self.notify("Copied to clipboard", timeout=2)
@@ -271,59 +276,20 @@ class OpcodeApp(App):
             inp.focus()
             return
 
-        if cmd == "/cancel":
-            self._agent.cancel()
-            inp.focus()
-            return
+        # 命令分流：命中 → 本地分发
+        if self._command_registry is not None:
+            parsed = parse(value, self._command_registry)
+            if parsed is not None:
+                await dispatch(parsed, self)
+                inp.focus()
+                return
 
-        if cmd == "/plan":
-            self._enter_plan_mode()
-            await chat.mount(Static(
-                "[dim]-- plan mode: read-only tools enabled, describe your task --[/dim]",
-                classes="tool-status",
-            ))
-            chat.scroll_end(animate=False)
-            inp.focus()
-            return
+        # 不是命令 → 送入 Agent
+        await self._process_agent_input(value)
 
-        if cmd == "/compression":
-            await chat.mount(Static(
-                "[dim]-- compression: offloaded results --[/dim]",
-                classes="tool-status",
-            ))
-            chat.scroll_end(animate=False)
-            inp.focus()
-            return
-
-        if cmd == "/do":
-            self._enter_do_mode()
-            await chat.mount(Static(
-                "[dim]-- do mode: all tools enabled, executing plan --[/dim]",
-                classes="tool-status",
-            ))
-            chat.scroll_end(animate=False)
-            inp.focus()
-            return
-
-        if cmd == "/compact":
-            await self._compact_action()
-            inp.focus()
-            return
-
-        if cmd == "/save":
-            await self._save_action()
-            inp.focus()
-            return
-
-        if cmd == "/load" or cmd.startswith("/load "):
-            parts = value.split(maxsplit=1)
-            if len(parts) == 1:
-                await self._load_list_action()
-            else:
-                await self._load_action(parts[1].strip())
-            inp.focus()
-            return
-
+    async def _process_agent_input(self, value: str) -> None:
+        inp = self.query_one("#user-input", ChatInput)
+        chat = self.query_one("#chat", VerticalScroll)
         inp.disabled = True
 
         await chat.mount(Static(f"[bold cyan]• {value}[/bold cyan]", classes="user-msg"))
@@ -386,7 +352,7 @@ class OpcodeApp(App):
                     )
                     await chat.mount(prompt)
                     chat.scroll_end(animate=False)
-                    inp.blur()  # 确保 TextArea 不拦截 y/s/n 按键
+                    inp.blur()
                     decision = await self._wait_for_permission_choice()
                     inp.focus()
                     await prompt.remove()
@@ -413,7 +379,7 @@ class OpcodeApp(App):
                 elif isinstance(agent_event, SummarizeEvent):
                     await chat.mount(Static(
                         f"[dim]Summarized {agent_event.summarized_count} messages "
-                        f"({agent_event.total_before // 1000}K → {agent_event.total_after // 1000}K tokens)[/dim]",
+                        f"({agent_event.total_before // 1000}K -> {agent_event.total_after // 1000}K tokens)[/dim]",
                         classes="tool-status",
                     ))
                 elif isinstance(agent_event, CompressionSkippedEvent):
@@ -459,152 +425,47 @@ class OpcodeApp(App):
         self._permission_decision_event = None
         return self._permission_decision
 
-    async def _compact_action(self) -> None:
+    # --- UiController implementation ---
+
+    async def display_message(self, text: str) -> None:
         chat = self.query_one("#chat", VerticalScroll)
-        decision = await self._agent.compact_manual()
-        if decision is None:
-            await chat.mount(Static(
-                "[dim]Compression: context manager not available[/dim]",
-                classes="tool-status",
-            ))
-            chat.scroll_end(animate=False)
-            return
-
-        parts = []
-        if decision.did_offload:
-            parts.append(f"offloaded {decision.offloaded_count} tool results")
-        if decision.did_summarize:
-            after = self._agent._context_manager.estimator.estimate(self._agent.messages)
-            parts.append(
-                f"summarized {decision.summarized_count} messages "
-                f"({decision.total_tokens // 1000}K → {after // 1000}K tokens)"
-            )
-        if decision.summary_broken:
-            parts.append("summarizer broken after 3 failures")
-        if not parts:
-            parts.append("no compression needed")
-
-        await chat.mount(Static(
-            f"[dim]Compression: {', '.join(parts)}[/dim]",
-            classes="tool-status",
-        ))
+        await chat.mount(Static(text, classes="tool-status"))
         chat.scroll_end(animate=False)
 
-    async def _save_action(self) -> None:
-        chat = self.query_one("#chat", VerticalScroll)
-        count = self._agent.save_session()
-        if count > 0:
-            archiver = getattr(self._agent, "_archiver", None)
-            if archiver:
-                file_path = archiver.file_path
-                await chat.mount(Static(
-                    f"[dim]Session saved to {file_path} ({count} messages)[/dim]",
-                    classes="tool-status",
-                ))
-        else:
-            await chat.mount(Static(
-                "[dim]Save: session archiver not available[/dim]",
-                classes="tool-status",
-            ))
-        chat.scroll_end(animate=False)
+    async def send_to_agent(self, text: str) -> None:
+        await self._process_agent_input(text)
 
-    async def _load_list_action(self) -> None:
-        chat = self.query_one("#chat", VerticalScroll)
+    def switch_mode(self, mode: str) -> None:
+        if mode == "plan":
+            self._enter_plan_mode()
+        elif mode in ("default", "do"):
+            self._enter_do_mode()
+        self._update_status_bar()
+
+    def get_token_usage(self) -> dict | None:
+        tracker = self._agent.tracker
+        s = tracker.summary
+        if not s or s.get("input_tokens", 0) == 0:
+            return None
+        return dict(s)
+
+    def get_session_id(self) -> str:
         archiver = getattr(self._agent, "_archiver", None)
-        if archiver is None:
-            await chat.mount(Static(
-                "[dim]Load: session archiver not available[/dim]",
-                classes="tool-status",
-            ))
-            chat.scroll_end(animate=False)
-            return
+        if archiver:
+            return archiver._session_id
+        return "unknown"
 
-        from opcode_cli.session.index import list_sessions
-        sessions_dir = archiver._dir
-        sessions = list_sessions(sessions_dir, limit=10)
+    async def refresh_status(self) -> None:
+        self._update_status_bar()
 
-        if not sessions:
-            await chat.mount(Static(
-                "[dim]No saved sessions found[/dim]",
-                classes="tool-status",
-            ))
-            chat.scroll_end(animate=False)
-            return
-
-        lines = ["[bold]Recent sessions:[/bold]"]
-        for s in sessions:
-            date_str = s.created_at.strftime("%Y-%m-%d %H:%M")
-            lines.append(
-                f"  [cyan]{s.id}[/cyan] — {s.title[:60]} — {date_str} — {s.message_count} messages"
-            )
-        await chat.mount(Static("\n".join(lines), classes="tool-status"))
-        chat.scroll_end(animate=False)
-
-    async def _load_action(self, session_id: str) -> None:
-        chat = self.query_one("#chat", VerticalScroll)
-        archiver = getattr(self._agent, "_archiver", None)
-        if archiver is None:
-            await chat.mount(Static(
-                "[dim]Load: session archiver not available[/dim]",
-                classes="tool-status",
-            ))
-            chat.scroll_end(animate=False)
-            return
-
-        from opcode_cli.session.index import session_exists
-        if not session_exists(archiver._dir, session_id):
-            await chat.mount(Static(
-                f"[dim]Session {session_id} not found[/dim]",
-                classes="tool-status",
-            ))
-            chat.scroll_end(animate=False)
-            return
-
-        # 警告未保存
-        if len(self._agent.messages) > 1:
-            await chat.mount(Static(
-                "[dim]Loading session... (current unsaved changes will be lost)[/dim]",
-                classes="tool-status",
-            ))
-
-        warnings = await self._agent.load_session(session_id)
-        if warnings:
-            for w in warnings:
-                await chat.mount(Static(f"[dim]{w}[/dim]", classes="tool-status"))
-
-        # 清空并重建聊天区
-        old_chat = self.query_one("#chat", VerticalScroll)
-        await old_chat.remove()
+    async def clear_chat(self) -> None:
+        old = self.query_one("#chat", VerticalScroll)
+        await old.remove()
         new_chat = VerticalScroll(id="chat", can_focus=False)
-        await self.mount(new_chat)
-
-        await new_chat.mount(Static(
-            f"[dim]Session {session_id} restored ({len(self._agent.messages)} messages)[/dim]",
-            classes="tool-status",
-        ))
-
-        # 渲染历史消息
-        for msg in self._agent.messages:
-            if msg.role == "user":
-                await new_chat.mount(Static(
-                    f"[bold cyan]• {msg.content[:200]}[/bold cyan]",
-                    classes="user-msg",
-                ))
-            elif msg.role == "assistant":
-                content = msg.content[:500]
-                if msg.compressed:
-                    content = f"[dim](summarized)[/dim] {content}"
-                await new_chat.mount(Static(
-                    f"[bold green]opcode[/bold green]\n{content}",
-                    classes="assistant-msg",
-                ))
-            elif msg.role == "tool":
-                await new_chat.mount(Static(
-                    f"[dim]tool: {msg.name} ({msg.content[:100]})[/dim]",
-                    classes="tool-status",
-                ))
-
-        new_chat.scroll_end(animate=False)
+        await self.mount(new_chat, before=self.query_one("#status-bar"))
+        await new_chat.mount(
+            Static("Chat cleared. Type /help for commands, /exit to quit.")
+        )
 
     def _enter_plan_mode(self) -> None:
         plan_mode = self._agent.plan_mode
