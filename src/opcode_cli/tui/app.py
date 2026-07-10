@@ -459,6 +459,8 @@ class OpcodeApp(App):
         self._update_status_bar()
 
     async def clear_chat(self) -> None:
+        if self._agent._skills_manager:
+            self._agent._skills_manager.clear()
         old = self.query_one("#chat", VerticalScroll)
         await old.remove()
         new_chat = VerticalScroll(id="chat", can_focus=False)

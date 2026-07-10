@@ -30,7 +30,12 @@ from opcode_cli.prompt import (
     get_fixed_modules,
     get_instructions_module,
     get_memory_module,
+    get_skills_module,
 )
+from opcode_cli.skills import SkillRegistry, SkillsLoader, SkillsManager
+from opcode_cli.tools.install_skill import InstallSkillTool
+from opcode_cli.tools.load_skill import LoadSkillTool
+from opcode_cli.tools.run_isolated import RunIsolatedSkillTool
 from opcode_cli.provider.manager import ProviderManager
 from opcode_cli.session.archiver import SessionArchiver
 from opcode_cli.session.cleanup import cleanup as cleanup_sessions
@@ -124,12 +129,29 @@ def main() -> None:
     user_memory_dir = Path.home() / ".opcode" / "memory"
     memory_index_text = load_merged_index(project_memory_dir, user_memory_dir)
 
+    # --- Skill System 初始化 ---
+    builtin_skills_dir = Path(__file__).parent / "skills" / "builtin"
+    user_skills_dir = Path.home() / ".opcode" / "skills"
+    project_skills_dir = Path(project_root) / ".opcode" / "skills"
+
+    skills_loader = SkillsLoader(builtin_skills_dir, user_skills_dir, project_skills_dir)
+    skill_definitions = skills_loader.load_all()
+
+    skill_registry = SkillRegistry()
+    for defn in skill_definitions.values():
+        skill_registry.register(defn)
+
+    skills_manager = SkillsManager(skill_registry, registry)
+    skills_index_text = skills_manager.get_index_text()
+    skills_module = get_skills_module(skills_index_text)
+
     # 组装 SystemPromptBuilder
     instructions_module = get_instructions_module(instructions_text)
     memory_module = get_memory_module(memory_index_text)
     builder = SystemPromptBuilder(
         instructions_module=instructions_module,
         memory_module=memory_module,
+        skills_module=skills_module,
     )
     builder.register_many(get_fixed_modules())
     env_context = build_environment_context(
@@ -184,6 +206,7 @@ def main() -> None:
         context_manager=context_mgr,
         archiver=archiver,
         memory_updater=memory_updater,
+        skills_manager=skills_manager,
     )
     plan_mode = PlanMode(registry, injector)
     agent.set_plan_mode(plan_mode)
@@ -196,8 +219,25 @@ def main() -> None:
         permission_checker=permission_checker,
         project_memory_dir=Path(project_root) / ".opcode" / "memory",
         user_memory_dir=Path.home() / ".opcode" / "memory",
+        skills_manager=skills_manager,
     )
     register_commands(command_registry, command_deps)
+
+    # 注册 Skill 工具
+    registry.register(LoadSkillTool(skills_manager, command_registry, agent))
+    registry.register(InstallSkillTool(
+        skills_loader=skills_loader,
+        skill_registry=skill_registry,
+        user_skills_dir=user_skills_dir,
+    ))
+    registry.register(RunIsolatedSkillTool(
+        provider=provider,
+        registry=registry,
+        builder=builder,
+        permission_checker=permission_checker,
+        skills_manager=skills_manager,
+    ))
+    skills_manager.register_commands(command_registry)
 
     app = OpcodeApp(agent, command_registry)
     app.run()
