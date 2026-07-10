@@ -1,5 +1,7 @@
+from __future__ import annotations
+
 import asyncio
-from collections.abc import AsyncIterator
+from collections.abc import AsyncIterator, Awaitable, Callable
 
 from opcode_cli.agent.events import ToolResultEvent
 from opcode_cli.provider.base import ToolCall
@@ -12,7 +14,9 @@ class ToolBatcher:
         self._registry = registry
 
     async def execute(
-        self, tool_calls: list[ToolCall]
+        self,
+        tool_calls: list[ToolCall],
+        pre_hook: Callable[[ToolCall], Awaitable[ToolResult | None]] | None = None,
     ) -> AsyncIterator[ToolResultEvent]:
         read_only_calls: list[ToolCall] = []
         side_effect_calls: list[ToolCall] = []
@@ -35,6 +39,10 @@ class ToolBatcher:
         if read_only_calls:
 
             async def _run_read_only(tc: ToolCall) -> tuple[str, ToolResult]:
+                if pre_hook:
+                    intercept = await pre_hook(tc)
+                    if intercept is not None:
+                        return tc.id, intercept
                 try:
                     r = await self._registry.execute(tc.name, **tc.input)
                     return tc.id, r
@@ -48,6 +56,13 @@ class ToolBatcher:
                 results[tool_id] = result
 
         for tc in side_effect_calls:
+            if tc.id in results:
+                continue
+            if pre_hook:
+                intercept = await pre_hook(tc)
+                if intercept is not None:
+                    results[tc.id] = intercept
+                    continue
             try:
                 result = await self._registry.execute(tc.name, **tc.input)
             except Exception as e:

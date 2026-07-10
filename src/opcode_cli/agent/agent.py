@@ -46,6 +46,7 @@ class Agent:
         archiver: object | None = None,
         memory_updater: object | None = None,
         skills_manager: object | None = None,
+        hook_runner: object | None = None,
     ) -> None:
         self._provider = provider
         self._registry = registry
@@ -63,8 +64,10 @@ class Agent:
         self._archiver = archiver
         self._memory_updater = memory_updater
         self._skills_manager = skills_manager
+        self._hook_runner = hook_runner
         self._permission_response: asyncio.Event | None = None
         self._permission_decision: str = ""
+        self._session_active: bool = False
         self.messages: list[Message] = []
 
     @property
@@ -155,7 +158,24 @@ class Agent:
             yield DoneEvent(finish_reason="cancelled")
             return
         self._cancelled.clear()
+
+        # --- Hook: session_start (first run only) ---
+        if not self._session_active and self._hook_runner:
+            self._session_active = True
+            await self._hook_runner.fire("session_start", {
+                "provider_type": type(self._provider).__name__,
+                "model": getattr(self._provider, "_model", "unknown"),
+            })
+
         self.messages.append(Message(role="user", content=user_input))
+
+        # --- Hook: user_input ---
+        if self._hook_runner:
+            await self._hook_runner.fire("user_input", {
+                "input_text": user_input,
+                "input_length": len(user_input),
+                "is_command": user_input.startswith("/"),
+            })
 
         unknown_streak = 0
 
@@ -166,6 +186,14 @@ class Agent:
 
             # 记录本迭代前的消息数，用于迭代末存档
             msg_count_before = len(self.messages)
+
+            # --- Hook: iteration_start ---
+            if self._hook_runner:
+                await self._hook_runner.fire("iteration_start", {
+                    "iteration": iteration,
+                    "max_iterations": self._max_iterations,
+                    "active_tools": [t.name for t in self._registry.list_tools()],
+                })
 
             # API 请求前执行上下文压缩检查
             async for ctx_event in self._run_context_checks():
@@ -194,6 +222,12 @@ class Agent:
                 skills_content = self._skills_manager.get_active_skills_content()
                 if skills_content:
                     chat_messages.append(system_reminder(skills_content))
+            # --- Hook: prompt injection ---
+            if self._hook_runner:
+                for text in self._hook_runner.pending_prompts():
+                    chat_messages.append(system_reminder(text))
+                for text in self._hook_runner.consume_once_prompts():
+                    chat_messages.append(system_reminder(text))
 
             collector = StreamCollector()
             try:
@@ -206,6 +240,13 @@ class Agent:
                     yield event
             except Exception as e:
                 yield ErrorEvent(message=str(e))
+                # --- Hook: error ---
+                if self._hook_runner:
+                    await self._hook_runner.fire("error", {
+                        "error_message": str(e),
+                        "error_type": type(e).__name__,
+                        "iteration": iteration,
+                    })
                 yield DoneEvent(finish_reason="stream_error")
                 return
 
@@ -232,6 +273,14 @@ class Agent:
                     content=collector.content,
                     thinking=collector.thinking if collector.thinking else None,
                 ))
+                # --- Hook: assistant_response ---
+                if self._hook_runner:
+                    await self._hook_runner.fire("assistant_response", {
+                        "response_text": collector.content,
+                        "response_length": len(collector.content),
+                        "thinking_length": len(collector.thinking or ""),
+                        "finish_reason": "stop",
+                    })
                 # 存档最后的 assistant 消息 + 异步触发记忆更新
                 if self._archiver:
                     new_messages = self.messages[msg_count_before:]
@@ -320,6 +369,32 @@ class Agent:
                                     )
                                 )
 
+            # --- Hook: tool_pre_execute (check before batcher) ---
+            if self._hook_runner and allowed_calls:
+                for tc in list(allowed_calls):
+                    fire_result = await self._hook_runner.fire("tool_pre_execute", {
+                        "tool_name": tc.name,
+                        "tool_args": tc.input,
+                        "tool_call_id": tc.id,
+                        "is_read_only": getattr(
+                            self._registry.get(tc.name), "read_only", False
+                        ) if not self._is_unknown_tool(tc.name) else False,
+                    })
+                    if fire_result.intercept:
+                        allowed_calls.remove(tc)
+                        yield ToolResultEvent(
+                            tool_id=tc.id, name=tc.name,
+                            result=ToolResult(
+                                success=False, content="", error=fire_result.intercept,
+                            ),
+                        )
+                        self.messages.append(Message(
+                            role="tool",
+                            content=f"Error: {fire_result.intercept}",
+                            tool_call_id=tc.id,
+                            name=tc.name,
+                        ))
+
             if allowed_calls:
                 batcher = ToolBatcher(self._registry)
                 async for event in batcher.execute(allowed_calls):
@@ -332,12 +407,28 @@ class Agent:
                         tool_call_id=event.tool_id,
                         name=event.name,
                     ))
+                    # --- Hook: tool_post_execute ---
+                    if self._hook_runner:
+                        await self._hook_runner.fire("tool_post_execute", {
+                            "tool_name": event.name,
+                            "tool_call_id": event.tool_id,
+                            "success": event.result.success,
+                            "result_content": event.result.content[:500],
+                        })
 
             # 存档本轮新增的消息
             if self._archiver:
                 new_messages = self.messages[msg_count_before:]
                 if new_messages:
                     self._archiver.append(new_messages)
+
+            # --- Hook: iteration_end ---
+            if self._hook_runner:
+                await self._hook_runner.fire("iteration_end", {
+                    "iteration": iteration,
+                    "finish_reason": "tool_use" if tool_calls else "stop",
+                    "tool_calls_count": len(tool_calls) if tool_calls else 0,
+                })
 
         yield DoneEvent(finish_reason="max_iterations")
 

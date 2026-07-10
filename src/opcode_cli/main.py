@@ -11,6 +11,9 @@ from opcode_cli.commands.builtin._deps import CommandDeps
 from opcode_cli.commands.registry import CommandRegistry
 from opcode_cli.context import ContextManager
 from opcode_cli.config import load_config
+from opcode_cli.hooks.config import load_hooks
+from opcode_cli.hooks.runner import HookRunner
+from opcode_cli.hooks.types import HookContext
 from opcode_cli.instructions.loader import load as load_instructions
 from opcode_cli.mcp import MCPServerManager, load_mcp_config
 from opcode_cli.memory.index import MemoryIndex, load_merged_index
@@ -195,6 +198,19 @@ def main() -> None:
 
     archiver = SessionArchiver(sessions_dir, session_id)
 
+    # Hook 系统初始化
+    hooks = load_hooks(os.getcwd())
+    hook_runner = None
+    if hooks:
+        base_ctx = HookContext(
+            event="",
+            session_id=session_id,
+            project_root=os.getcwd(),
+            timestamp=0.0,
+            data={},
+        )
+        hook_runner = HookRunner(hooks, base_ctx)
+
     agent = Agent(
         provider, registry,
         max_iterations=args.max_iterations,
@@ -207,6 +223,7 @@ def main() -> None:
         archiver=archiver,
         memory_updater=memory_updater,
         skills_manager=skills_manager,
+        hook_runner=hook_runner,
     )
     plan_mode = PlanMode(registry, injector)
     agent.set_plan_mode(plan_mode)
