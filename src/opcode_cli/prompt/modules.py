@@ -84,6 +84,28 @@ _TEXT_OUTPUT = PromptModule(
 )
 
 
+def get_instructions_module(instructions_text: str) -> PromptModule | None:
+    """将项目指令文件内容包装为 PromptModule。"""
+    if not instructions_text.strip():
+        return None
+    return PromptModule(
+        name="project_instructions",
+        priority=0,
+        content=f"<project-context>\n{instructions_text}\n</project-context>",
+    )
+
+
+def get_memory_module(memory_index_text: str) -> PromptModule | None:
+    """将记忆索引内容包装为 PromptModule。"""
+    if not memory_index_text.strip():
+        return None
+    return PromptModule(
+        name="auto_memory",
+        priority=99,
+        content=f"<auto-memory>\n{memory_index_text}\n</auto-memory>",
+    )
+
+
 def get_fixed_modules() -> list[PromptModule]:
     return [
         _IDENTITY,
