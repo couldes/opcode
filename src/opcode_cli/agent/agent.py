@@ -43,6 +43,8 @@ class Agent:
         permission_checker: PermissionChecker | None = None,
         mcp_manager: object | None = None,
         context_manager: ContextManager | None = None,
+        archiver: object | None = None,
+        memory_updater: object | None = None,
     ) -> None:
         self._provider = provider
         self._registry = registry
@@ -57,6 +59,8 @@ class Agent:
         self._permission_checker = permission_checker
         self._mcp_manager = mcp_manager
         self._context_manager = context_manager
+        self._archiver = archiver
+        self._memory_updater = memory_updater
         self._permission_response: asyncio.Event | None = None
         self._permission_decision: str = ""
         self.messages: list[Message] = []
@@ -122,6 +126,28 @@ class Agent:
             self.messages, provider=self._provider, manual=True
         )
 
+    def save_session(self) -> int:
+        """将当前 messages 全量写入 JSONL，返回消息数。"""
+        if not self._archiver:
+            return 0
+        self._archiver.write_full(self.messages)
+        return self._archiver.message_count
+
+    async def load_session(self, session_id: str) -> list[str]:
+        """从 JSONL 恢复会话，返回警告列表。"""
+        from opcode_cli.session.recovery import recover
+
+        if self._archiver is None:
+            return ["archiver not available"]
+
+        sessions_dir = self._archiver._dir
+        result = await recover(
+            sessions_dir, session_id,
+            context_manager=self._context_manager,
+        )
+        self.messages = result.messages
+        return result.warnings
+
     async def run(self, user_input: str) -> AsyncIterator[AgentEvent]:
         if self._cancelled.is_set():
             yield DoneEvent(finish_reason="cancelled")
@@ -135,6 +161,9 @@ class Agent:
             if self._cancelled.is_set():
                 yield DoneEvent(finish_reason="cancelled")
                 return
+
+            # 记录本迭代前的消息数，用于迭代末存档
+            msg_count_before = len(self.messages)
 
             # API 请求前执行上下文压缩检查
             async for ctx_event in self._run_context_checks():
@@ -197,6 +226,13 @@ class Agent:
                     content=collector.content,
                     thinking=collector.thinking if collector.thinking else None,
                 ))
+                # 存档最后的 assistant 消息 + 异步触发记忆更新
+                if self._archiver:
+                    new_messages = self.messages[msg_count_before:]
+                    if new_messages:
+                        self._archiver.append(new_messages)
+                if self._memory_updater:
+                    self._memory_updater.update_async(self.messages, self._provider)
                 yield DoneEvent(finish_reason="stop")
                 return
 
@@ -290,6 +326,12 @@ class Agent:
                         tool_call_id=event.tool_id,
                         name=event.name,
                     ))
+
+            # 存档本轮新增的消息
+            if self._archiver:
+                new_messages = self.messages[msg_count_before:]
+                if new_messages:
+                    self._archiver.append(new_messages)
 
         yield DoneEvent(finish_reason="max_iterations")
 

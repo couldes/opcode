@@ -5,8 +5,11 @@ from textual.app import App, ComposeResult
 from textual.containers import VerticalScroll
 from textual.widgets import Static, TextArea
 
+from pathlib import Path
+
 from opcode_cli.agent.agent import Agent
 from opcode_cli.agent.events import (
+
     CompressionSkippedEvent,
     DoneEvent,
     ErrorEvent,
@@ -247,6 +250,20 @@ class OpcodeApp(App):
             inp.focus()
             return
 
+        if cmd == "/save":
+            await self._save_action()
+            inp.focus()
+            return
+
+        if cmd == "/load" or cmd.startswith("/load "):
+            parts = value.split(maxsplit=1)
+            if len(parts) == 1:
+                await self._load_list_action()
+            else:
+                await self._load_action(parts[1].strip())
+            inp.focus()
+            return
+
         inp.disabled = True
 
         await chat.mount(Static(f"[bold cyan]• {value}[/bold cyan]", classes="user-msg"))
@@ -412,6 +429,122 @@ class OpcodeApp(App):
             classes="tool-status",
         ))
         chat.scroll_end(animate=False)
+
+    async def _save_action(self) -> None:
+        chat = self.query_one("#chat", VerticalScroll)
+        count = self._agent.save_session()
+        if count > 0:
+            archiver = getattr(self._agent, "_archiver", None)
+            if archiver:
+                file_path = archiver.file_path
+                await chat.mount(Static(
+                    f"[dim]Session saved to {file_path} ({count} messages)[/dim]",
+                    classes="tool-status",
+                ))
+        else:
+            await chat.mount(Static(
+                "[dim]Save: session archiver not available[/dim]",
+                classes="tool-status",
+            ))
+        chat.scroll_end(animate=False)
+
+    async def _load_list_action(self) -> None:
+        chat = self.query_one("#chat", VerticalScroll)
+        archiver = getattr(self._agent, "_archiver", None)
+        if archiver is None:
+            await chat.mount(Static(
+                "[dim]Load: session archiver not available[/dim]",
+                classes="tool-status",
+            ))
+            chat.scroll_end(animate=False)
+            return
+
+        from opcode_cli.session.index import list_sessions
+        sessions_dir = archiver._dir
+        sessions = list_sessions(sessions_dir, limit=10)
+
+        if not sessions:
+            await chat.mount(Static(
+                "[dim]No saved sessions found[/dim]",
+                classes="tool-status",
+            ))
+            chat.scroll_end(animate=False)
+            return
+
+        lines = ["[bold]Recent sessions:[/bold]"]
+        for s in sessions:
+            date_str = s.created_at.strftime("%Y-%m-%d %H:%M")
+            lines.append(
+                f"  [cyan]{s.id}[/cyan] — {s.title[:60]} — {date_str} — {s.message_count} messages"
+            )
+        await chat.mount(Static("\n".join(lines), classes="tool-status"))
+        chat.scroll_end(animate=False)
+
+    async def _load_action(self, session_id: str) -> None:
+        chat = self.query_one("#chat", VerticalScroll)
+        archiver = getattr(self._agent, "_archiver", None)
+        if archiver is None:
+            await chat.mount(Static(
+                "[dim]Load: session archiver not available[/dim]",
+                classes="tool-status",
+            ))
+            chat.scroll_end(animate=False)
+            return
+
+        from opcode_cli.session.index import session_exists
+        if not session_exists(archiver._dir, session_id):
+            await chat.mount(Static(
+                f"[dim]Session {session_id} not found[/dim]",
+                classes="tool-status",
+            ))
+            chat.scroll_end(animate=False)
+            return
+
+        # 警告未保存
+        if len(self._agent.messages) > 1:
+            await chat.mount(Static(
+                "[dim]Loading session... (current unsaved changes will be lost)[/dim]",
+                classes="tool-status",
+            ))
+
+        warnings = await self._agent.load_session(session_id)
+        if warnings:
+            for w in warnings:
+                await chat.mount(Static(f"[dim]{w}[/dim]", classes="tool-status"))
+
+        # 清空并重建聊天区
+        old_chat = self.query_one("#chat", VerticalScroll)
+        await old_chat.remove()
+        new_chat = VerticalScroll(id="chat", can_focus=False)
+        await self.mount(new_chat)
+
+        await new_chat.mount(Static(
+            f"[dim]Session {session_id} restored ({len(self._agent.messages)} messages)[/dim]",
+            classes="tool-status",
+        ))
+
+        # 渲染历史消息
+        for msg in self._agent.messages:
+            if msg.role == "user":
+                await new_chat.mount(Static(
+                    f"[bold cyan]• {msg.content[:200]}[/bold cyan]",
+                    classes="user-msg",
+                ))
+            elif msg.role == "assistant":
+                content = msg.content[:500]
+                if msg.compressed:
+                    content = f"[dim](summarized)[/dim] {content}"
+                await new_chat.mount(Static(
+                    f"[bold green]opcode[/bold green]\n{content}",
+                    classes="assistant-msg",
+                ))
+            elif msg.role == "tool":
+                await new_chat.mount(Static(
+                    f"[dim]tool: {msg.name} ({msg.content[:100]})[/dim]",
+                    classes="tool-status",
+                ))
+
+        new_chat.scroll_end(animate=False)
 
     def _enter_plan_mode(self) -> None:
         plan_mode = self._agent.plan_mode
