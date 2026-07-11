@@ -1,12 +1,18 @@
 from __future__ import annotations
 
-from pathlib import Path
+from pydantic import BaseModel
 
 from opcode_cli.skills import SkillDefinition
-from opcode_cli.tools.base import BaseTool, ToolResult
+from opcode_cli.tools.base import Tool, ToolCategory, ToolResult
 
 
-class RunIsolatedSkillTool(BaseTool):
+class RunIsolatedSkillParams(BaseModel):
+    name: str
+    input: str
+    params: dict | None = None
+
+
+class RunIsolatedSkillTool(Tool):
     """在独立对话中执行 Skill（系统级，不受白名单约束）。"""
 
     name = "run_isolated_skill"
@@ -14,26 +20,9 @@ class RunIsolatedSkillTool(BaseTool):
         "Execute a skill in an isolated sub-conversation and return a summary. "
         "Use this for tasks that should not pollute the main conversation history."
     )
-    parameters = {
-        "type": "object",
-        "properties": {
-            "name": {
-                "type": "string",
-                "description": "Skill name to execute",
-            },
-            "input": {
-                "type": "string",
-                "description": "Input for the skill",
-            },
-            "params": {
-                "type": "object",
-                "description": "Optional parameter values",
-                "additionalProperties": {"type": "string"},
-            },
-        },
-        "required": ["name", "input"],
-    }
-    system_level: bool = True
+    params_model = RunIsolatedSkillParams
+    category = ToolCategory.COMMAND
+    is_system_tool = True
 
     def __init__(
         self,
@@ -49,47 +38,37 @@ class RunIsolatedSkillTool(BaseTool):
         self._permission_checker = permission_checker
         self._manager = skills_manager
 
-    async def execute(
-        self,
-        name: str,
-        input: str,
-        params: dict | None = None,
-    ) -> ToolResult:
-        # 查找 Skill 定义
+    async def execute(self, params: RunIsolatedSkillParams, working_dir: str | None = None) -> ToolResult:
         definition: SkillDefinition | None = None
         if hasattr(self._manager, "_registry"):
             try:
-                definition = self._manager._registry.get(name)
+                definition = self._manager._registry.get(params.name)
             except KeyError:
                 return ToolResult(
-                    success=False,
-                    content=f"",
-                    error=f"Skill '{name}' not found.",
+                    success=False, content="",
+                    error=f"Skill '{params.name}' not found.",
                 )
 
         if definition is None:
             return ToolResult(
-                success=False,
-                content=f"",
-                error=f"Skill '{name}' not found.",
+                success=False, content="",
+                error=f"Skill '{params.name}' not found.",
             )
 
-        # 构建子 Agent 的系统提示词
         from opcode_cli.agent.agent import Agent
         from opcode_cli.prompt.builder import PromptModule
 
         skill_module = PromptModule(
-            name=f"skill_{name}",
+            name=f"skill_{params.name}",
             priority=0,
             content=(
                 f"<isolated-skill>\n"
-                f"You are executing the '{name}' skill.\n\n"
+                f"You are executing the '{params.name}' skill.\n\n"
                 f"{definition.body}\n"
                 f"</isolated-skill>"
             ),
         )
 
-        # 创建子 Agent
         child_builder = type(self._builder)(
             instructions_module=skill_module,
             memory_module=None,
@@ -104,12 +83,10 @@ class RunIsolatedSkillTool(BaseTool):
             permission_checker=self._permission_checker,
         )
 
-        # 运行子 Agent
         messages_before = len(child_agent.messages)
-        async for _ in child_agent.run(input):
+        async for _ in child_agent.run(params.input):
             pass
 
-        # 收集响应摘要
         new_messages = child_agent.messages[messages_before:]
         summary_parts: list[str] = []
         for msg in new_messages:
@@ -122,5 +99,5 @@ class RunIsolatedSkillTool(BaseTool):
         summary = "\n\n".join(summary_parts) if summary_parts else "(no output)"
         return ToolResult(
             success=True,
-            content=f"Skill '{name}' completed.\n\nResult summary:\n{summary}",
+            content=f"Skill '{params.name}' completed.\n\nResult summary:\n{summary}",
         )

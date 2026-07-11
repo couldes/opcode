@@ -1,9 +1,16 @@
 from pathlib import Path
 
-from opcode_cli.tools.base import BaseTool, ToolResult
+from pydantic import BaseModel
+
+from opcode_cli.tools.base import Tool, ToolCategory, ToolResult
 
 
-class WriteFileTool(BaseTool):
+class WriteFileParams(BaseModel):
+    path: str
+    content: str
+
+
+class WriteFileTool(Tool):
     name = "write_file"
     description = (
         "Write content to a file. Creates parent directories if needed. "
@@ -11,29 +18,16 @@ class WriteFileTool(BaseTool):
         "Prefer this tool over Bash echo >. "
         "The path parameter must use an absolute path."
     )
-    parameters = {
-        "type": "object",
-        "properties": {
-            "path": {
-                "type": "string",
-                "description": "Path to the file to write.",
-            },
-            "content": {
-                "type": "string",
-                "description": "Content to write to the file.",
-            },
-        },
-        "required": ["path", "content"],
-    }
-    read_only = False
+    params_model = WriteFileParams
+    category = ToolCategory.WRITE
 
-    async def execute(self, path: str, content: str, working_dir: str | None = None) -> ToolResult:
-        p = Path(path)
+    async def execute(self, params: WriteFileParams, working_dir: str | None = None) -> ToolResult:
+        p = Path(params.path)
         if working_dir and not p.is_absolute():
-            p = Path(working_dir) / path
+            p = Path(working_dir) / params.path
         try:
             p.parent.mkdir(parents=True, exist_ok=True)
-            p.write_text(content, encoding="utf-8")
+            p.write_text(params.content, encoding="utf-8")
         except PermissionError:
-            return ToolResult(False, "", f"permission denied: {path}")
-        return ToolResult(True, f"wrote {len(content)} bytes to {path}")
+            return ToolResult(False, "", f"permission denied: {params.path}")
+        return ToolResult(True, f"wrote {len(params.content)} bytes to {params.path}")

@@ -1,9 +1,16 @@
 import asyncio
 
-from opcode_cli.tools.base import BaseTool, ToolResult
+from pydantic import BaseModel
+
+from opcode_cli.tools.base import Tool, ToolCategory, ToolResult
 
 
-class RunCommandTool(BaseTool):
+class RunCommandParams(BaseModel):
+    command: str
+    cwd: str | None = None
+
+
+class RunCommandTool(Tool):
     name = "run_command"
     description = (
         "Execute a shell command. Returns stdout, stderr, and exit code. "
@@ -11,28 +18,15 @@ class RunCommandTool(BaseTool):
         "Prefer dedicated tools (ReadFile, WriteFile, EditFile, GlobFind, GrepSearch) "
         "over this tool for file operations."
     )
-    parameters = {
-        "type": "object",
-        "properties": {
-            "command": {
-                "type": "string",
-                "description": "The shell command to execute.",
-            },
-            "cwd": {
-                "type": "string",
-                "description": "Working directory for the command (optional).",
-            },
-        },
-        "required": ["command"],
-    }
-    read_only = False
+    params_model = RunCommandParams
+    category = ToolCategory.COMMAND
     MAX_OUTPUT = 50 * 1024
 
-    async def execute(self, command: str, cwd: str | None = None, working_dir: str | None = None) -> ToolResult:
-        effective_cwd = cwd or working_dir
+    async def execute(self, params: RunCommandParams, working_dir: str | None = None) -> ToolResult:
+        effective_cwd = params.cwd or working_dir
         try:
             process = await asyncio.create_subprocess_shell(
-                command,
+                params.command,
                 cwd=effective_cwd,
                 stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.PIPE,

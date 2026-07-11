@@ -26,7 +26,7 @@ class ToolBatcher:
         for tc in tool_calls:
             try:
                 tool = self._registry.get(tc.name)
-                if tool.read_only:
+                if tool.is_read_only:
                     read_only_calls.append(tc)
                 else:
                     side_effect_calls.append(tc)

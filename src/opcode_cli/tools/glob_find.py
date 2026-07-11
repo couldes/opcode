@@ -1,9 +1,16 @@
 from pathlib import Path
 
-from opcode_cli.tools.base import BaseTool, ToolResult
+from pydantic import BaseModel
+
+from opcode_cli.tools.base import Tool, ToolCategory, ToolResult
 
 
-class GlobFindTool(BaseTool):
+class GlobFindParams(BaseModel):
+    pattern: str
+    path: str = "."
+
+
+class GlobFindTool(Tool):
     name = "glob_find"
     description = (
         "Find files matching a glob pattern. "
@@ -11,24 +18,13 @@ class GlobFindTool(BaseTool):
         "Prefer this tool over Bash find/ls. "
         "Multiple independent searches can be called in parallel in the same turn."
     )
-    parameters = {
-        "type": "object",
-        "properties": {
-            "pattern": {
-                "type": "string",
-                "description": "Glob pattern to match (e.g. '**/*.py').",
-            },
-            "path": {
-                "type": "string",
-                "description": "Directory to search in (default: current directory).",
-            },
-        },
-        "required": ["pattern"],
-    }
-    read_only = True
+    params_model = GlobFindParams
+    category = ToolCategory.READ
+    is_concurrency_safe = True
     MAX_RESULTS = 200
 
-    async def execute(self, pattern: str, path: str = ".", working_dir: str | None = None) -> ToolResult:
+    async def execute(self, params: GlobFindParams, working_dir: str | None = None) -> ToolResult:
+        path = params.path
         if working_dir and path == ".":
             path = working_dir
         base = Path(path)
@@ -37,9 +33,9 @@ class GlobFindTool(BaseTool):
         if not base.exists():
             return ToolResult(False, "", f"path not found: {path}")
 
-        matches = list(base.glob(pattern))
+        matches = list(base.glob(params.pattern))
         if not matches:
-            return ToolResult(True, f"no files found matching: {pattern}")
+            return ToolResult(True, f"no files found matching: {params.pattern}")
 
         lines = []
         for p in matches[:self.MAX_RESULTS]:

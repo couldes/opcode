@@ -30,6 +30,27 @@ from opcode_cli.tools.base import BaseTool, ToolResult
 from opcode_cli.tools.registry import ToolRegistry
 
 
+def _format_recall_result(notes: list) -> str:
+    """Format recalled memories into a system-reminder block."""
+    from datetime import datetime, timezone
+
+    lines = ["<relevant-memories>"]
+    for note in notes:
+        age_hint = ""
+        age = (datetime.now(timezone.utc).timestamp() - note.updated_at) / 86400
+        if age < 1:
+            age_hint = " (saved today)"
+        elif age < 7:
+            age_hint = f" ({int(age)} days ago)"
+        else:
+            age_hint = f" ({int(age)} days ago — may be outdated)"
+
+        lines.append(f"@memory: {note.name} — {note.description}{age_hint}")
+        lines.append(note.content)
+    lines.append("</relevant-memories>")
+    return "\n".join(lines)
+
+
 class Agent:
     def __init__(
         self,
@@ -56,6 +77,8 @@ class Agent:
         team_member_name: str = "",
         team_lead_name: str = "",
         team_context_save_path: str = "",
+        project_memory_dir: str = "",
+        user_memory_dir: str = "",
     ) -> None:
         self._provider = provider
         self._registry = registry
@@ -77,8 +100,7 @@ class Agent:
         self._system_prompt_override = system_prompt_override
         self._sub_agent_result_queue = sub_agent_result_queue
         self._working_dir = working_dir
-        self._permission_response: asyncio.Event | None = None
-        self._permission_decision: str = ""
+        self._permission_future: asyncio.Future | None = None
         self._session_active: bool = False
         self._is_fork = initial_messages is not None
         self.messages: list[Message] = list(initial_messages) if initial_messages else []
@@ -87,6 +109,13 @@ class Agent:
         self._team_member_name = team_member_name
         self._team_lead_name = team_lead_name
         self._team_context_save_path = team_context_save_path
+        # Async memory extraction guard
+        self._extracting: bool = False
+        self._pending_extraction: bool = False
+        # Memory recall / prefetch
+        self._project_memory_dir = project_memory_dir
+        self._user_memory_dir = user_memory_dir
+        self._recall_task: asyncio.Task | None = None
 
     @property
     def messages_list(self) -> list[Message]:
@@ -110,9 +139,8 @@ class Agent:
         self._plan_mode = plan_mode
 
     def respond_to_permission(self, decision: str) -> None:
-        self._permission_decision = decision
-        if self._permission_response:
-            self._permission_response.set()
+        if self._permission_future and not self._permission_future.done():
+            self._permission_future.set_result(decision)
 
     async def _run_context_checks(self) -> AsyncIterator[AgentEvent]:
         """在 API 请求前执行上下文压缩检查。
@@ -195,6 +223,16 @@ class Agent:
                 "is_command": user_input.startswith("/"),
             })
 
+        # --- Start memory prefetch (non-command only) ---
+        if (
+            not user_input.startswith("/")
+            and self._project_memory_dir
+            and self._user_memory_dir
+        ):
+            self._recall_task = asyncio.ensure_future(
+                self._prefetch_memories(user_input)
+            )
+
         unknown_streak = 0
 
         for iteration in range(1, self._max_iterations + 1):
@@ -212,6 +250,17 @@ class Agent:
             if self._team_mailbox:
                 for event in self._poll_team_mailbox():
                     yield event
+
+            # --- Inject memory recall results if ready ---
+            if self._recall_task is not None and self._recall_task.done():
+                try:
+                    recall_result = self._recall_task.result()
+                    if recall_result:
+                        recall_text = _format_recall_result(recall_result)
+                        self.messages.append(system_reminder(recall_text))
+                except Exception:
+                    pass
+                self._recall_task = None
 
             # 记录本迭代前的消息数，用于迭代末存档
             msg_count_before = len(self.messages)
@@ -330,7 +379,7 @@ class Agent:
                     if new_messages:
                         self._archiver.append(new_messages)
                 if self._memory_updater:
-                    self._memory_updater.update_async(self.messages, self._provider)
+                    self._extract_memories_async()
                 yield DoneEvent(finish_reason="stop", content=collector.content)
                 return
 
@@ -373,23 +422,21 @@ class Agent:
                     )
                 else:  # ask_user
                     from opcode_cli.permission.rules import _serialize_args
+                    loop = asyncio.get_running_loop()
+                    future = loop.create_future()
                     yield PermissionPromptEvent(
-                        tool_call_id=tc.id,
                         tool_name=tc.name,
-                        args_str=_serialize_args(tc.input),
+                        description=_serialize_args(tc.input),
+                        future=future,
                     )
-                    self._permission_response = asyncio.Event()
-                    self._permission_decision = ""
+                    self._permission_future = future
                     try:
-                        await asyncio.wait_for(
-                            self._permission_response.wait(),
-                            timeout=60.0,
-                        )
+                        decision = await asyncio.wait_for(future, timeout=60.0)
                     except asyncio.TimeoutError:
-                        self._permission_decision = "deny"
-                    self._permission_response = None
+                        decision = "deny"
+                    self._permission_future = None
 
-                    if self._permission_decision == "deny":
+                    if decision == "deny":
                         self.messages.append(Message(
                             role="tool",
                             content="Error: denied by user",
@@ -402,15 +449,19 @@ class Agent:
                         )
                     else:
                         allowed_calls.append(tc)
-                        if self._permission_decision == "allow_session":
-                            if self._permission_checker is not None:
-                                self._permission_checker.add_session_rule(
-                                    Rule(
-                                        tool_name=tc.name,
-                                        pattern=_serialize_args(tc.input),
-                                        action="allow",
-                                    )
+                        if decision == "allow_session" and self._permission_checker is not None:
+                            self._permission_checker.add_session_rule(
+                                Rule(
+                                    tool_name=tc.name,
+                                    pattern=_serialize_args(tc.input),
+                                    action="allow",
                                 )
+                            )
+                        elif decision == "dont_ask_again" and self._permission_checker is not None:
+                            self._permission_checker.add_session_allow(
+                                tool_name=tc.name,
+                                args_str=_serialize_args(tc.input),
+                            )
 
             # --- Hook: tool_pre_execute (check before batcher) ---
             if self._hook_runner and allowed_calls:
@@ -420,7 +471,7 @@ class Agent:
                         "tool_args": tc.input,
                         "tool_call_id": tc.id,
                         "is_read_only": getattr(
-                            self._registry.get(tc.name), "read_only", False
+                            self._registry.get(tc.name), "is_read_only", False
                         ) if not self._is_unknown_tool(tc.name) else False,
                     })
                     if fire_result.intercept:
@@ -450,6 +501,15 @@ class Agent:
                         tool_call_id=event.tool_id,
                         name=event.name,
                     ))
+                    # --- Recovery: record file reads & skill calls ---
+                    if self._context_manager and event.result.success:
+                        from opcode_cli.context.recovery import record_tool_invocation
+                        record_tool_invocation(
+                            self._context_manager.recovery,
+                            event.name,
+                            result_content=event.result.content,
+                        )
+
                     # --- Hook: tool_post_execute ---
                     if self._hook_runner:
                         await self._hook_runner.fire("tool_post_execute", {
@@ -547,6 +607,51 @@ class Agent:
         except KeyError:
             return True
 
+    def _extract_memories_async(self) -> None:
+        """异步提取记忆，使用互斥锁 + 尾随执行防止并发重复写入。"""
+        if self._extracting:
+            self._pending_extraction = True
+            return
+
+        self._extracting = True
+
+        async def _do_extract():
+            try:
+                await self._memory_updater.update_async(self.messages, self._provider)
+            finally:
+                self._extracting = False
+                if self._pending_extraction:
+                    self._pending_extraction = False
+                    await self._memory_updater.update_async(self.messages, self._provider)
+
+        import asyncio
+        asyncio.ensure_future(_do_extract())
+
+    async def _prefetch_memories(self, query: str) -> list:
+        """Background prefetch: scan memory dirs, LLM-select relevant, return formatted notes."""
+        from pathlib import Path
+        from opcode_cli.memory.recall import find_relevant_memories
+
+        project_dir = Path(self._project_memory_dir)
+        user_dir = Path(self._user_memory_dir)
+
+        # Collect recently used tool names for the selector
+        recent_tools = [
+            t.name for t in self._registry.list_tools()
+            if hasattr(t, 'name')
+        ][:10]
+
+        try:
+            return await find_relevant_memories(
+                query=query,
+                project_dir=project_dir,
+                user_dir=user_dir,
+                provider=self._provider,
+                recent_tools=recent_tools,
+            )
+        except Exception:
+            return []
+
     def _build_tools(self) -> list[dict] | None:
         if self._plan_mode is not None:
             tools = self._plan_mode.get_tools()
@@ -558,25 +663,11 @@ class Agent:
             if whitelist is not None:
                 tools = [
                     t for t in tools
-                    if getattr(t, "system_level", False) or t.name in whitelist
+                    if getattr(t, "is_system_tool", False) or t.name in whitelist
                 ]
 
         if not tools:
             return None
 
-        if isinstance(self._provider, AnthropicProvider):
-            return [
-                {"name": t.name, "description": t.description, "input_schema": t.parameters}
-                for t in tools
-            ]
-        return [
-            {
-                "type": "function",
-                "function": {
-                    "name": t.name,
-                    "description": t.description,
-                    "parameters": t.parameters,
-                },
-            }
-            for t in tools
-        ]
+        fmt = "anthropic" if isinstance(self._provider, AnthropicProvider) else "openai"
+        return [t.get_schema(fmt=fmt) for t in tools]

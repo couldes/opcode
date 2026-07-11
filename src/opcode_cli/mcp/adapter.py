@@ -1,7 +1,7 @@
 from collections.abc import Awaitable, Callable
 
 from mcp import ClientSession
-from opcode_cli.tools.base import BaseTool, ToolResult
+from opcode_cli.tools.base import BaseTool, ToolCategory, ToolResult
 
 
 class MCPToolAdapter(BaseTool):
@@ -18,7 +18,7 @@ class MCPToolAdapter(BaseTool):
         self.name = f"{server_name}__{tool_name}"
         self.description = description
         self.parameters = parameters
-        self.read_only = False
+        self.category = ToolCategory.COMMAND
         self._server_name = server_name
         self._tool_name = tool_name
         self._session_provider = session_provider

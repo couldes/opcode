@@ -2,7 +2,9 @@ import re
 from pathlib import Path
 from typing import BinaryIO
 
-from opcode_cli.tools.base import BaseTool, ToolResult
+from pydantic import BaseModel
+
+from opcode_cli.tools.base import Tool, ToolCategory, ToolResult
 
 SKIP_DIRS = {".git", "__pycache__", ".venv", "venv", "node_modules", ".pytest_cache"}
 
@@ -13,7 +15,12 @@ def _is_text_file(f: BinaryIO) -> bool:
     return b"\0" not in chunk
 
 
-class GrepSearchTool(BaseTool):
+class GrepSearchParams(BaseModel):
+    pattern: str
+    path: str = "."
+
+
+class GrepSearchTool(Tool):
     name = "grep_search"
     description = (
         "Search file contents using a regex pattern. "
@@ -21,24 +28,13 @@ class GrepSearchTool(BaseTool):
         "Prefer this tool over Bash grep/rg. "
         "Multiple independent searches can be called in parallel in the same turn."
     )
-    parameters = {
-        "type": "object",
-        "properties": {
-            "pattern": {
-                "type": "string",
-                "description": "Regex pattern to search for.",
-            },
-            "path": {
-                "type": "string",
-                "description": "Directory to search in (default: current directory).",
-            },
-        },
-        "required": ["pattern"],
-    }
-    read_only = True
+    params_model = GrepSearchParams
+    category = ToolCategory.READ
+    is_concurrency_safe = True
     MAX_MATCHES = 500
 
-    async def execute(self, pattern: str, path: str = ".", working_dir: str | None = None) -> ToolResult:
+    async def execute(self, params: GrepSearchParams, working_dir: str | None = None) -> ToolResult:
+        path = params.path
         if working_dir and path == ".":
             path = working_dir
         base = Path(path)
@@ -48,7 +44,7 @@ class GrepSearchTool(BaseTool):
             return ToolResult(False, "", f"path not found: {path}")
 
         try:
-            regex = re.compile(pattern)
+            regex = re.compile(params.pattern)
         except re.error as e:
             return ToolResult(False, "", f"invalid regex: {e}")
 
@@ -80,7 +76,7 @@ class GrepSearchTool(BaseTool):
                 break
 
         if not matches:
-            return ToolResult(True, f"no matches found for: {pattern}")
+            return ToolResult(True, f"no matches found for: {params.pattern}")
 
         result = "\n".join(matches)
         if len(matches) >= self.MAX_MATCHES:

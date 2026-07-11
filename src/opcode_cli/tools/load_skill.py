@@ -1,9 +1,14 @@
-from __future__ import annotations
+from pydantic import BaseModel
 
-from opcode_cli.tools.base import BaseTool, ToolResult
+from opcode_cli.tools.base import Tool, ToolCategory, ToolResult
 
 
-class LoadSkillTool(BaseTool):
+class LoadSkillParams(BaseModel):
+    name: str
+    params: dict | None = None
+
+
+class LoadSkillTool(Tool):
     """加载并激活一个 Skill（系统级，不受白名单约束）。"""
 
     name = "load_skill"
@@ -12,22 +17,10 @@ class LoadSkillTool(BaseTool):
         "Skills provide reusable AI operation templates. "
         "After loading, the skill's instructions and tools become available."
     )
-    parameters = {
-        "type": "object",
-        "properties": {
-            "name": {
-                "type": "string",
-                "description": "Skill name to load",
-            },
-            "params": {
-                "type": "object",
-                "description": "Optional parameter values to fill placeholders in the skill content",
-                "additionalProperties": {"type": "string"},
-            },
-        },
-        "required": ["name"],
-    }
-    system_level: bool = True
+    params_model = LoadSkillParams
+    category = ToolCategory.COMMAND
+    is_system_tool = True
+    should_defer = True
 
     def __init__(
         self,
@@ -39,6 +32,6 @@ class LoadSkillTool(BaseTool):
         self._command_registry = command_registry
         self._agent = agent
 
-    async def execute(self, name: str, params: dict | None = None) -> ToolResult:
-        result = await self._manager.activate(name, self._command_registry, self._agent)
+    async def execute(self, params: LoadSkillParams, working_dir: str | None = None) -> ToolResult:
+        result = await self._manager.activate(params.name, self._command_registry, self._agent)
         return ToolResult(success=True, content=result)
