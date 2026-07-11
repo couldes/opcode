@@ -55,6 +55,14 @@ from opcode_cli.tools.registry import ToolRegistry
 from opcode_cli.tools.run_command import RunCommandTool
 from opcode_cli.tools.write_file import WriteFileTool
 from opcode_cli.worktree import WorktreeManager, CleanupScheduler
+from opcode_cli.team.manager import TeamManager
+from opcode_cli.team.coordinator import CoordinatorMode
+from opcode_cli.team.member_runner import MemberRunner
+from opcode_cli.team.merge import MergeManager
+from opcode_cli.team.tools import register_team_tools, register_lead_tools, make_mailbox_factory
+from opcode_cli.team.mailbox import Mailbox
+from opcode_cli.team.task_board import TaskBoard
+from opcode_cli.team.registry import NameRegistry
 from opcode_cli.tui.app import OpcodeApp
 
 
@@ -84,7 +92,28 @@ def main() -> None:
         choices=["strict", "default", "accept-edits", "permissive"],
         help="permission mode (default: from config or 'default')",
     )
+    parser.add_argument(
+        "--team",
+        default=None,
+        help="team name (start as a team member instead of Lead)",
+    )
+    parser.add_argument(
+        "--member",
+        default=None,
+        help="member name (used with --team to start as a team member)",
+    )
+    parser.add_argument(
+        "--backend",
+        default="auto",
+        choices=["auto", "tmux", "iterm2", "in-process"],
+        help="member runtime backend (default: auto-detect)",
+    )
     args = parser.parse_args()
+
+    # --- 队员模式：--team 和 --member 都存在时跳过 TUI，直接运行队员循环 ---
+    if args.team and args.member:
+        asyncio.run(_run_member_mode(args))
+        return
 
     try:
         config = load_config(args.config)
@@ -297,8 +326,202 @@ def main() -> None:
     agent_tool._parent_messages_ref = agent.messages
     registry.register(agent_tool)
 
+    # --- Team Lead 系统初始化 ---
+    teams_base = Path.home() / ".opcode" / "teams"
+
+    team_manager = TeamManager(teams_base)
+    merge_manager = MergeManager(Path(project_root))
+
+    member_runner = MemberRunner(
+        provider=provider,
+        base_registry=registry,
+        role_repo=role_repo,
+        teams_base=teams_base,
+        hook_runner=hook_runner,
+        worktree_manager=worktree_manager,
+        permission_checker=permission_checker,
+    )
+
+    coordinator = CoordinatorMode()
+
+    # 在 Lead 的 registry 上注册团队管理工具
+    register_lead_tools(
+        registry=registry,
+        team_manager=team_manager,
+        member_runner=member_runner,
+        role_repo=role_repo,
+        worktree_manager=worktree_manager,
+        project_root=project_root,
+    )
+
+    # 将相关引用注入 Agent（供 coordinator 模式使用）
+    agent._team_coordinator = coordinator
+    agent._team_base_registry = registry
+    agent._team_manager = team_manager
+    agent._member_runner = member_runner
+    agent._merge_manager = merge_manager
+
     app = OpcodeApp(agent, command_registry)
     app.run()
+
+
+async def _run_member_mode(args) -> None:
+    """队员模式：加载团队配置，构造成员 Agent，运行队员循环。"""
+    import logging
+    from opcode_cli.agent.events import DoneEvent, ErrorEvent
+    from opcode_cli.provider.manager import ProviderManager
+    from opcode_cli.config import load_config as load_cfg
+    from opcode_cli.subagent.repo import RoleRepository
+    from opcode_cli.team.manager import TeamManager as TM
+    from opcode_cli.team.mailbox import Mailbox
+    from opcode_cli.team.tools import make_mailbox_factory, register_team_tools
+    from opcode_cli.team.task_board import TaskBoard
+    from opcode_cli.team.registry import NameRegistry
+    from opcode_cli.tools.registry import ToolRegistry as TR
+    from opcode_cli.tools.read_file import ReadFileTool
+    from opcode_cli.tools.write_file import WriteFileTool
+    from opcode_cli.tools.edit_file import EditFileTool
+    from opcode_cli.tools.run_command import RunCommandTool
+    from opcode_cli.tools.glob_find import GlobFindTool
+    from opcode_cli.tools.grep_search import GrepSearchTool
+    from opcode_cli.subagent.filter import build_sub_registry
+
+    logging.basicConfig(level=logging.INFO)
+
+    log = logging.getLogger(__name__)
+    log.info("Starting member mode: team=%s, member=%s, backend=%s",
+             args.team, args.member, args.backend)
+
+    # 加载配置
+    try:
+        app_config = load_cfg(args.config)
+    except (FileNotFoundError, ValueError) as e:
+        print(f"config error: {e}", file=sys.stderr)
+        sys.exit(1)
+
+    # Provider
+    mgr = ProviderManager(app_config)
+    provider = mgr.get_provider(args.provider)
+
+    # 基础工具注册表
+    base_registry = TR(timeout=30.0)
+    base_registry.register(ReadFileTool())
+    base_registry.register(WriteFileTool())
+    base_registry.register(EditFileTool())
+    base_registry.register(RunCommandTool())
+    base_registry.register(GlobFindTool())
+    base_registry.register(GrepSearchTool())
+
+    # 加载团队
+    teams_base = Path.home() / ".opcode" / "teams"
+    team_mgr = TM(teams_base)
+    config = team_mgr.load(args.team)
+
+    # 获取成员信息
+    member_info = config.members.get(args.member)
+    if member_info is None:
+        print(f"member '{args.member}' not found in team '{args.team}'", file=sys.stderr)
+        sys.exit(1)
+
+    # 加载角色
+    role_repo = RoleRepository()
+    role_repo.load_and_register(os.getcwd())
+    role = role_repo.get(member_info.role_name)
+
+    # 构建受限注册表
+    sub_registry = build_sub_registry(base_registry, role, block_agent_tool=True)
+
+    # 注册协作工具
+    mailboxes_dir = config.root_dir / "mailboxes"
+    mailbox_factory = make_mailbox_factory(mailboxes_dir)
+    own_mailbox = Mailbox(mailboxes_dir / f"{args.member}.jsonl")
+    task_board = TaskBoard(config.root_dir / "tasks.json")
+    name_registry = NameRegistry(
+        config.root_dir / "roster.json",
+        config.root_dir / "runtime.json",
+    )
+
+    register_team_tools(
+        registry=sub_registry,
+        task_board=task_board,
+        mailbox_factory=mailbox_factory,
+        own_mailbox=own_mailbox,
+        name_registry=name_registry,
+        sender_name=args.member,
+    )
+
+    # 审批守卫
+    approval_guard = None
+    if member_info.needs_approval:
+        from opcode_cli.team.approval import ApprovalGuard
+        approval_guard = ApprovalGuard(
+            member_name=args.member,
+            lead_name=config.lead_name,
+            mailbox=own_mailbox,
+        )
+
+    # 上下文恢复
+    ctx_path = config.root_dir / "context" / f"{args.member}.json"
+    initial_messages = None
+    system_prompt = role.system_prompt
+    working_dir = member_info.working_dir or None
+
+    if ctx_path.exists():
+        import json
+        with open(ctx_path, "r") as f:
+            ctx_data = json.load(f)
+        from opcode_cli.provider.base import Message
+        initial_messages = [
+            Message(role=m["role"], content=m["content"])
+            for m in ctx_data.get("messages", [])
+        ]
+        log.info("Context restored for '%s': %d messages", args.member, len(initial_messages))
+
+    agent = Agent(
+        provider=provider,
+        registry=sub_registry,
+        max_iterations=role.max_turns,
+        system_prompt_override=system_prompt,
+        working_dir=working_dir,
+        initial_messages=initial_messages,
+        team_mailbox=own_mailbox,
+        team_approval_guard=approval_guard,
+        team_member_name=args.member,
+        team_lead_name=config.lead_name,
+        team_context_save_path=str(ctx_path),
+    )
+
+    # 读取初始任务
+    initial_task = "Check your mailbox for tasks from the Lead."
+    msgs = own_mailbox.read_all(unread_only=True, sender=config.lead_name)
+    for msg in msgs:
+        if msg.protocol == "task_assignment":
+            initial_task = msg.body
+            own_mailbox.mark_read(msg.msg_id)
+            break
+
+    # 标记在线
+    name_registry.set_online(args.member, args.backend)
+
+    # 运行队员循环
+    try:
+        async for event in agent.run(initial_task):
+            if isinstance(event, DoneEvent):
+                member_info.status = "idle"
+                agent.save_team_context()
+                log.info("Member '%s' task complete, context saved", args.member)
+                break
+            elif isinstance(event, ErrorEvent):
+                member_info.status = "failed"
+                agent.save_team_context()
+                log.error("Member '%s' error: %s", args.member, event.message)
+                break
+    except Exception as e:
+        log.error("Member '%s' loop crashed: %s", args.member, e)
+        try:
+            agent.save_team_context()
+        except Exception:
+            pass
 
 
 if __name__ == "__main__":
