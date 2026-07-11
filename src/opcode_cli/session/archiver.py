@@ -1,12 +1,14 @@
 import json
 import logging
 import secrets
+import time
 from dataclasses import asdict
 from datetime import datetime
 from pathlib import Path
 
 from opcode_cli.provider.base import Message, ToolCall
 from opcode_cli.session import SessionMeta
+from opcode_cli.session.types import RecordType, SessionRecord
 
 logger = logging.getLogger(__name__)
 
@@ -71,6 +73,20 @@ class SessionArchiver:
             return []
         with open(self._file_path, "r", encoding="utf-8") as f:
             return [line.rstrip("\n") for line in f if line.strip()]
+
+
+def make_compact_boundary(summary: str, keep: list[Message]) -> SessionRecord:
+    """创建 COMPACT_BOUNDARY 记录，内联摘要 + keep 尾部。"""
+    keep_dicts = []
+    for msg in keep:
+        d = asdict(msg)
+        d["tool_calls"] = _serialize_tool_calls(msg.tool_calls)
+        keep_dicts.append(d)
+    return SessionRecord(
+        type=RecordType.COMPACT_BOUNDARY,
+        content={"summary": summary, "keep": keep_dicts},
+        timestamp=time.time(),
+    )
 
 
 def _serialize_tool_calls(tool_calls: list[ToolCall] | None) -> list[dict] | None:

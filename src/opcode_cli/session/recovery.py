@@ -7,8 +7,29 @@ from opcode_cli.context.manager import ContextManager
 from opcode_cli.provider.base import Message, ToolCall
 from opcode_cli.prompt.reminder import system_reminder
 from opcode_cli.session import RecoveryResult
+from opcode_cli.session.types import RecordType, SessionRecord
 
 logger = logging.getLogger(__name__)
+
+
+def validate_message_chain(messages: list[Message]) -> list[str]:
+    """校验 tool_use ↔ tool_result 配对完整，返回警告列表。"""
+    warnings: list[str] = []
+    _fix_truncated_tool_calls(messages, warnings)
+    return warnings
+
+
+def recover_from_last_boundary(records: list[SessionRecord]) -> tuple[list[SessionRecord], str | None]:
+    """从最后一个 COMPACT_BOUNDARY 开始重放，返回裁切后的 records 和摘要文本。"""
+    last_boundary = -1
+    summary: str | None = None
+    for i, rec in enumerate(records):
+        if rec.type == RecordType.COMPACT_BOUNDARY:
+            last_boundary = i
+            summary = rec.content.get("summary") if isinstance(rec.content, dict) else None
+    if last_boundary >= 0:
+        return records[last_boundary:], summary
+    return records, None
 
 
 async def recover(

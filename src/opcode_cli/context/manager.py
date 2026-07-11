@@ -3,6 +3,7 @@ from dataclasses import dataclass
 from opcode_cli.context.estimator import TokenEstimator
 from opcode_cli.context.offload import OffloadManager
 from opcode_cli.context.summary import SummaryEngine
+from opcode_cli.context.types import CompactCircuitBreaker, RecoveryState
 from opcode_cli.provider.base import BaseProvider, Message
 
 
@@ -17,6 +18,10 @@ class CompressionDecision:
     did_summarize: bool = False
     summarized_count: int = 0
     summary_broken: bool = False
+
+
+SOFT_MARGIN = 13000   # 软阈值余量，正常触发走熔断器
+HARD_MARGIN = 3000    # 硬阈值余量，强制触发跳过熔断器
 
 
 class ContextManager:
@@ -40,6 +45,8 @@ class ContextManager:
         self._offload = offload_mgr or OffloadManager(project_root, session_id)
         self._summary = summary_engine or SummaryEngine()
         self._context_window = context_window
+        self._recovery = RecoveryState()
+        self._circuit_breaker = CompactCircuitBreaker()
 
     @property
     def estimator(self) -> TokenEstimator:
@@ -49,6 +56,14 @@ class ContextManager:
     def summary_engine(self) -> SummaryEngine:
         return self._summary
 
+    @property
+    def recovery(self) -> RecoveryState:
+        return self._recovery
+
+    @property
+    def circuit_breaker(self) -> CompactCircuitBreaker:
+        return self._circuit_breaker
+
     async def before_request(
         self,
         messages: list[Message],
@@ -57,55 +72,90 @@ class ContextManager:
     ) -> CompressionDecision:
         """API 请求前执行上下文压缩检查。
 
-        manual=True 时安全余量收窄到 3K（用户手动触发）。
+        使用双阈值策略：
+        - SOFT (13K margin)：正常触发，走熔断器保护
+        - HARD (3K margin)：强制压缩，跳过熔断器
         """
         total = self._estimator.estimate(messages)
-        safety = 3000 if manual else 13000
         window = self._context_window
 
         decision = CompressionDecision(
             total_tokens=total,
             context_window=window,
-            safety_margin=safety,
+            safety_margin=SOFT_MARGIN if not manual else HARD_MARGIN,
             summary_broken=self._summary.broken,
         )
 
-        # F3: 大工具结果存盘
-        records = self._offload.check(messages)
-        if records:
+        # F3: 大工具结果存盘（三段式）
+        new_messages, offload_records = self._offload.check(messages)
+        if offload_records:
             decision.did_offload = True
-            decision.offloaded_count = len(records)
+            decision.offloaded_count = len(offload_records)
+            messages[:] = new_messages  # 替换为 offload 后的副本
             total = self._estimator.estimate(messages)
             decision.total_tokens = total
 
-        # F4: 对话摘要（仅在 F3 后仍超窗口时）
-        if total + safety > window:
-            if self._summary.broken:
+        # 双阈值判断
+        should_compress_soft = total + SOFT_MARGIN > window
+        should_compress_hard = total + HARD_MARGIN > window
+
+        if not should_compress_soft and not should_compress_hard:
+            return decision
+
+        # 硬阈值：强制压缩，跳过熔断器
+        if should_compress_hard:
+            decision.safety_margin = HARD_MARGIN
+            return await self._do_compress(messages, provider, decision)
+
+        # 软阈值：走熔断器保护
+        if self._circuit_breaker.is_open():
+            return decision
+
+        return await self._do_compress(messages, provider, decision)
+
+    async def _do_compress(
+        self,
+        messages: list[Message],
+        provider: BaseProvider | None,
+        decision: CompressionDecision,
+    ) -> CompressionDecision:
+        """执行压缩逻辑（F4 + recovery attachment）。"""
+        if self._summary.broken:
+            decision.summary_broken = True
+            return decision
+
+        if not self._summary.should_summarize(messages):
+            return decision
+
+        # 压缩前附加 RecoveryState 附件
+        recovery_attachment = self._recovery.build_recovery_attachment()
+        if recovery_attachment:
+            messages.append(Message(
+                role="user",
+                content=f"[Recovery Context]\n{recovery_attachment}",
+            ))
+
+        summary_msgs = self._summary.build_summary_prompt(messages)
+        if not summary_msgs:
+            return decision
+
+        summary_text = await self._call_summary_llm(summary_msgs, provider)
+
+        if summary_text is None:
+            self._circuit_breaker.record_failure()
+            self._summary._failure_count += 1
+            if self._summary._failure_count >= 3:
+                self._summary._broken = True
                 decision.summary_broken = True
-                return decision
+            return decision
 
-            if not self._summary.should_summarize(messages):
-                return decision
+        # 成功 — 重置熔断器和失败计数
+        self._circuit_breaker.record_success()
+        self._summary._failure_count = 0
 
-            summary_msgs = self._summary.build_summary_prompt(messages)
-            if not summary_msgs:
-                return decision
-
-            summary_text = await self._call_summary_llm(summary_msgs, provider)
-
-            if summary_text is None:
-                self._summary._failure_count += 1
-                if self._summary._failure_count >= 3:
-                    self._summary._broken = True
-                    decision.summary_broken = True
-                return decision
-
-            # 成功 — 重置失败计数
-            self._summary._failure_count = 0
-
-            summarized_count = self._summary.apply_summary(messages, summary_text)
-            decision.did_summarize = True
-            decision.summarized_count = summarized_count
+        summarized_count = self._summary.apply_summary(messages, summary_text)
+        decision.did_summarize = True
+        decision.summarized_count = summarized_count
 
         return decision
 
@@ -114,10 +164,6 @@ class ContextManager:
         summary_msgs: list[Message],
         provider: BaseProvider | None,
     ) -> str | None:
-        """调用 LLM 生成摘要。
-
-        使用 provider 的 chat() 方法（非流式），不传入 tools。
-        """
         if provider is None:
             return None
 
@@ -133,9 +179,7 @@ class ContextManager:
             return None
 
     def update_anchor(self, api_input_tokens: int, messages: list[Message]) -> None:
-        """更新 Token 估算锚点。"""
         self._estimator.update_anchor(api_input_tokens, messages)
 
     def reset_summary(self) -> None:
-        """重置摘要熔断状态。"""
         self._summary.reset()

@@ -13,6 +13,14 @@ class TokenEstimator:
         self._anchor_messages_count: int = 0
         self._anchor_messages_text_len: int = 0
 
+    @property
+    def baseline_tokens(self) -> int:
+        return self._anchor_total or 0
+
+    @property
+    def anchor_count(self) -> int:
+        return self._anchor_messages_count
+
     @staticmethod
     def estimate_text(text: str) -> int:
         """对单段文本估算 tokens。
@@ -41,6 +49,20 @@ class TokenEstimator:
             return max(0, self._anchor_total + delta_tokens)
 
         return sum(self.estimate_text(m.content or "") for m in messages)
+
+    def current_tokens(self, messages: list[Message]) -> int:
+        """与 estimate() 相同，提供更明确的命名。"""
+        return self.estimate(messages)
+
+    def record_usage_anchor(
+        self,
+        input_tokens: int,
+        output_tokens: int = 0,
+        cache_read: int = 0,
+        cache_creation: int = 0,
+    ) -> None:
+        """记录真实 API 用量锚点。"""
+        self._anchor_total = input_tokens + cache_read + cache_creation + output_tokens
 
     def update_anchor(self, api_input_tokens: int, messages: list[Message]) -> None:
         """API 调用后，用真实 input_tokens 更新锚点。"""
