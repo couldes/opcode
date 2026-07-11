@@ -3,7 +3,7 @@ import sys
 
 from textual.app import App, ComposeResult
 from textual.containers import VerticalScroll
-from textual.widgets import Static, TextArea
+from textual.widgets import Static
 
 from pathlib import Path
 
@@ -24,6 +24,8 @@ from opcode_cli.agent.events import (
     ToolCallInput,
     ToolResultEvent,
 )
+from opcode_cli.tui.widgets.chat_input import OpcodeChatInput
+from opcode_cli.tui.widgets.inline_permission import PermissionWidget
 
 
 class ThinkingToggle(Static):
@@ -42,36 +44,6 @@ class ThinkingToggle(Static):
         else:
             self._content.add_class("hidden")
             self.update("[dim][+] Thinking (click to expand)[/dim]")
-
-
-class ChatInput(TextArea):
-    """Enter 提交，Shift+Enter 换行。"""
-
-    BINDINGS = [
-        ("shift+enter", "insert_newline", "New line"),
-    ]
-
-    async def _on_key(self, event) -> None:
-        if event.key == "enter":
-            event.stop()
-            event.prevent_default()
-            action_submit = getattr(self.app, "action_submit_input", None)
-            if action_submit is not None:
-                action_submit()
-            return
-        if event.key == "tab":
-            text = self.text
-            if text.startswith("/"):
-                event.stop()
-                event.prevent_default()
-                handler = getattr(self.app, "handle_tab_completion", None)
-                if handler is not None:
-                    handler(text, self.cursor_location)
-                return
-        await super()._on_key(event)
-
-    def action_insert_newline(self) -> None:
-        self.insert("\n")
 
 
 class StatusBar(Static):
@@ -140,18 +112,15 @@ class OpcodeApp(App):
         self._command_registry = command_registry
         self._plan_pending = False
         self._last_response = ""
-        self._permission_decision_event: asyncio.Event | None = None
-        self._permission_decision: str = ""
-        self._waiting_permission = False
 
     def compose(self) -> ComposeResult:
         with VerticalScroll(id="chat", can_focus=False):
             yield Static("Welcome to opcode. Type /help for commands, /exit to quit.\nPress Enter to send, Shift+Enter for new line.")
         yield StatusBar()
-        yield ChatInput(id="user-input")
+        yield OpcodeChatInput(work_dir=str(Path.cwd()), id="user-input")
 
     def on_mount(self) -> None:
-        self.query_one("#user-input", ChatInput).focus()
+        self.query_one("#user-input", OpcodeChatInput).focus()
 
     def _on_key(self, event) -> None:
         if event.key == "escape":
@@ -159,28 +128,7 @@ class OpcodeApp(App):
             event.stop()
             return
 
-        if getattr(self, "_waiting_permission", False):
-            key = event.key.lower()
-            if key == "y":
-                self._permission_decision = "allow_once"
-                if self._permission_decision_event:
-                    self._permission_decision_event.set()
-                event.stop()
-                return
-            elif key == "s":
-                self._permission_decision = "allow_session"
-                if self._permission_decision_event:
-                    self._permission_decision_event.set()
-                event.stop()
-                return
-            elif key == "n":
-                self._permission_decision = "deny"
-                if self._permission_decision_event:
-                    self._permission_decision_event.set()
-                event.stop()
-                return
-
-        inp = self.query_one("#user-input", ChatInput)
+        inp = self.query_one("#user-input", OpcodeChatInput)
         if not inp.has_focus and not inp.disabled and event.character:
             inp.focus()
             inp.insert(event.character)
@@ -192,7 +140,7 @@ class OpcodeApp(App):
             self.notify("Copied to clipboard", timeout=2)
 
     def action_submit_input(self) -> None:
-        inp = self.query_one("#user-input", ChatInput)
+        inp = self.query_one("#user-input", OpcodeChatInput)
         value = inp.text.strip()
         if not value:
             return
@@ -217,7 +165,7 @@ class OpcodeApp(App):
 
         matches = get_completions(after_slash, self._command_registry)
         chat = self.query_one("#chat", VerticalScroll)
-        inp = self.query_one("#user-input", ChatInput)
+        inp = self.query_one("#user-input", OpcodeChatInput)
 
         if len(matches) == 1:
             rest = text[col:]
@@ -256,7 +204,7 @@ class OpcodeApp(App):
 
     async def _process_input(self, value: str) -> None:
         cmd_lower = value.lower().strip()
-        inp = self.query_one("#user-input", ChatInput)
+        inp = self.query_one("#user-input", OpcodeChatInput)
 
         # 系统外前置命令（不在 registry 中）
         if cmd_lower in ("/exit", "/quit"):
@@ -290,7 +238,7 @@ class OpcodeApp(App):
         await self._process_agent_input(value)
 
     async def _process_agent_input(self, value: str) -> None:
-        inp = self.query_one("#user-input", ChatInput)
+        inp = self.query_one("#user-input", OpcodeChatInput)
         chat = self.query_one("#chat", VerticalScroll)
         inp.disabled = True
 
@@ -347,18 +295,20 @@ class OpcodeApp(App):
                     if not sys.stdin.isatty():
                         self._agent.respond_to_permission("deny")
                         continue
-                    prompt = Static(
-                        f"[bold yellow][?][/bold yellow] Allow {agent_event.tool_name}({agent_event.args_str})? "
-                        "[bold](y)[/bold]es this time / [bold](s)[/bold]ession / [bold](n)[/bold]o",
-                        classes="tool-status",
+                    widget = PermissionWidget(
+                        tool_name=agent_event.tool_name,
+                        description=agent_event.description,
+                        future=agent_event.future,
                     )
-                    await chat.mount(prompt)
+                    await chat.mount(widget)
                     chat.scroll_end(animate=False)
-                    inp.blur()
-                    decision = await self._wait_for_permission_choice()
+                    widget.focus()
+                    try:
+                        await asyncio.wait_for(agent_event.future, timeout=60.0)
+                    except asyncio.TimeoutError:
+                        if not agent_event.future.done():
+                            agent_event.future.set_result("deny")
                     inp.focus()
-                    await prompt.remove()
-                    self._agent.respond_to_permission(decision)
                 elif isinstance(agent_event, TeamApprovalEvent):
                     # 显示审批请求通知
                     task_ids_str = ", ".join(agent_event.task_ids) if agent_event.task_ids else "none"
@@ -432,21 +382,6 @@ class OpcodeApp(App):
             inp.disabled = False
             inp.focus()
 
-    async def _wait_for_permission_choice(self) -> str:
-        self._permission_decision_event = asyncio.Event()
-        self._permission_decision = ""
-        self._waiting_permission = True
-        try:
-            await asyncio.wait_for(
-                self._permission_decision_event.wait(),
-                timeout=60.0,
-            )
-        except asyncio.TimeoutError:
-            self._permission_decision = "deny"
-        self._waiting_permission = False
-        self._permission_decision_event = None
-        return self._permission_decision
-
     # --- UiController implementation ---
 
     async def display_message(self, text: str) -> None:
@@ -497,7 +432,7 @@ class OpcodeApp(App):
             return
         plan_mode.start_plan()
         self._plan_pending = True
-        inp = self.query_one("#user-input", ChatInput)
+        inp = self.query_one("#user-input", OpcodeChatInput)
         inp.text = ""
         inp.border_title = "Describe your task for planning..."
         self._update_status_bar()
@@ -508,7 +443,7 @@ class OpcodeApp(App):
             return
         plan_mode.start_do()
         self._plan_pending = False
-        inp = self.query_one("#user-input", ChatInput)
+        inp = self.query_one("#user-input", OpcodeChatInput)
         inp.text = ""
         inp.border_title = "Executing plan..."
         self._update_status_bar()

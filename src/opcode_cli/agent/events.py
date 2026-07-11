@@ -1,90 +1,83 @@
+from __future__ import annotations
+
+import asyncio
 from dataclasses import dataclass
 
 from opcode_cli.tools.base import ToolResult
 
 
-@dataclass
-class TextDelta:
-    content: str
+# --- Spec-compatible event types (frozen dataclass + union) ---
 
+@dataclass(frozen=True)
+class StreamText:
+    text: str
 
-@dataclass
-class ThinkingDelta:
-    content: str
+@dataclass(frozen=True)
+class ThinkingText:
+    text: str
 
-
-@dataclass
+@dataclass(frozen=True)
 class ToolCallStart:
     tool_id: str
     name: str
 
-
-@dataclass
+@dataclass(frozen=True)
 class ToolCallInput:
     tool_id: str
     input_delta: str
 
-
-@dataclass
+@dataclass(frozen=True)
 class ToolResultEvent:
     tool_id: str
     name: str
     result: ToolResult
 
-
-@dataclass
+@dataclass(frozen=True)
 class TokenUsageEvent:
     input_tokens: int
     output_tokens: int
 
-
-@dataclass
+@dataclass(frozen=True)
 class ProgressEvent:
     iteration: int
     max_iterations: int
 
-
-@dataclass
+@dataclass(frozen=True)
 class DoneEvent:
     finish_reason: str
     content: str = ""
 
-
-@dataclass
+@dataclass(frozen=True)
 class ErrorEvent:
     message: str
 
-
-@dataclass
+@dataclass(frozen=True)
 class CacheMetricsEvent:
     cache_creation_input_tokens: int
     cache_read_input_tokens: int
     input_tokens: int
 
-
-@dataclass
+@dataclass(frozen=True)
 class PermissionPromptEvent:
-    tool_call_id: str
     tool_name: str
-    args_str: str
+    description: str
+    future: asyncio.Future = None  # type: ignore
 
-
-@dataclass
+@dataclass(frozen=True)
 class OffloadEvent:
     count: int
 
-@dataclass
+@dataclass(frozen=True)
 class SummarizeEvent:
     summarized_count: int
     total_before: int
     total_after: int
 
-@dataclass
+@dataclass(frozen=True)
 class CompressionSkippedEvent:
-    reason: str  # "broken" | "too_few_messages" | "under_threshold"
+    reason: str
 
-
-@dataclass
+@dataclass(frozen=True)
 class SubAgentResultEvent:
     task_id: str
     agent_name: str
@@ -92,10 +85,9 @@ class SubAgentResultEvent:
     output: str
     input_tokens: int
     output_tokens: int
-    error: str | None
+    error: str | None = None
 
-
-@dataclass
+@dataclass(frozen=True)
 class TeamApprovalEvent:
     msg_id: str
     sender: str
@@ -103,9 +95,14 @@ class TeamApprovalEvent:
     task_ids: list
 
 
+# --- Aliases for backward compatibility ---
+TextDelta = StreamText
+ThinkingDelta = ThinkingText
+
+
 AgentEvent = (
-    TextDelta
-    | ThinkingDelta
+    StreamText
+    | ThinkingText
     | ToolCallStart
     | ToolCallInput
     | ToolResultEvent
