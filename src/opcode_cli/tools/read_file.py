@@ -23,8 +23,10 @@ class ReadFileTool(BaseTool):
     read_only = True
     MAX_SIZE = 100 * 1024
 
-    async def execute(self, path: str) -> ToolResult:
+    async def execute(self, path: str, working_dir: str | None = None) -> ToolResult:
         p = Path(path)
+        if working_dir and not p.is_absolute():
+            p = Path(working_dir) / path
         if not p.exists():
             return ToolResult(False, "", f"file not found: {path}")
         try:

@@ -50,6 +50,7 @@ class Agent:
         initial_messages: list[Message] | None = None,
         system_prompt_override: str | None = None,
         sub_agent_result_queue: asyncio.Queue | None = None,
+        working_dir: str | None = None,
     ) -> None:
         self._provider = provider
         self._registry = registry
@@ -70,6 +71,7 @@ class Agent:
         self._hook_runner = hook_runner
         self._system_prompt_override = system_prompt_override
         self._sub_agent_result_queue = sub_agent_result_queue
+        self._working_dir = working_dir
         self._permission_response: asyncio.Event | None = None
         self._permission_decision: str = ""
         self._session_active: bool = False
@@ -410,7 +412,7 @@ class Agent:
                         ))
 
             if allowed_calls:
-                batcher = ToolBatcher(self._registry)
+                batcher = ToolBatcher(self._registry, working_dir=self._working_dir)
                 async for event in batcher.execute(allowed_calls):
                     yield event
                     self.messages.append(Message(

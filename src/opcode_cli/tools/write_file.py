@@ -27,8 +27,10 @@ class WriteFileTool(BaseTool):
     }
     read_only = False
 
-    async def execute(self, path: str, content: str) -> ToolResult:
+    async def execute(self, path: str, content: str, working_dir: str | None = None) -> ToolResult:
         p = Path(path)
+        if working_dir and not p.is_absolute():
+            p = Path(working_dir) / path
         try:
             p.parent.mkdir(parents=True, exist_ok=True)
             p.write_text(content, encoding="utf-8")

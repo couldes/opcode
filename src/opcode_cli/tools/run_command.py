@@ -28,11 +28,12 @@ class RunCommandTool(BaseTool):
     read_only = False
     MAX_OUTPUT = 50 * 1024
 
-    async def execute(self, command: str, cwd: str | None = None) -> ToolResult:
+    async def execute(self, command: str, cwd: str | None = None, working_dir: str | None = None) -> ToolResult:
+        effective_cwd = cwd or working_dir
         try:
             process = await asyncio.create_subprocess_shell(
                 command,
-                cwd=cwd,
+                cwd=effective_cwd,
                 stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.PIPE,
             )

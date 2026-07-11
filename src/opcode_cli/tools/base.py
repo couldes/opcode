@@ -24,5 +24,5 @@ class BaseTool(ABC):
     system_level: bool = False  # 系统级工具不受白名单约束
 
     @abstractmethod
-    async def execute(self, **kwargs) -> ToolResult:
+    async def execute(self, working_dir: str | None = None, **kwargs) -> ToolResult:
         ...

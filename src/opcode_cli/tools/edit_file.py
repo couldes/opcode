@@ -35,9 +35,11 @@ class EditFileTool(BaseTool):
     read_only = False
 
     async def execute(
-        self, path: str, old_string: str, new_string: str
+        self, path: str, old_string: str, new_string: str, working_dir: str | None = None,
     ) -> ToolResult:
         p = Path(path)
+        if working_dir and not p.is_absolute():
+            p = Path(working_dir) / path
         if not p.exists():
             return ToolResult(False, "", f"file not found: {path}")
 

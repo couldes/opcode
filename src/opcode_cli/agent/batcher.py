@@ -10,8 +10,9 @@ from opcode_cli.tools.registry import ToolRegistry
 
 
 class ToolBatcher:
-    def __init__(self, registry: ToolRegistry) -> None:
+    def __init__(self, registry: ToolRegistry, working_dir: str | None = None) -> None:
         self._registry = registry
+        self._working_dir = working_dir
 
     async def execute(
         self,
@@ -44,7 +45,7 @@ class ToolBatcher:
                     if intercept is not None:
                         return tc.id, intercept
                 try:
-                    r = await self._registry.execute(tc.name, **tc.input)
+                    r = await self._registry.execute(tc.name, working_dir=self._working_dir, **tc.input)
                     return tc.id, r
                 except Exception as e:
                     return tc.id, ToolResult(success=False, content="", error=str(e))
@@ -64,7 +65,7 @@ class ToolBatcher:
                     results[tc.id] = intercept
                     continue
             try:
-                result = await self._registry.execute(tc.name, **tc.input)
+                result = await self._registry.execute(tc.name, working_dir=self._working_dir, **tc.input)
             except Exception as e:
                 result = ToolResult(success=False, content="", error=str(e))
             results[tc.id] = result

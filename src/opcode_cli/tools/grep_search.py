@@ -38,8 +38,12 @@ class GrepSearchTool(BaseTool):
     read_only = True
     MAX_MATCHES = 500
 
-    async def execute(self, pattern: str, path: str = ".") -> ToolResult:
+    async def execute(self, pattern: str, path: str = ".", working_dir: str | None = None) -> ToolResult:
+        if working_dir and path == ".":
+            path = working_dir
         base = Path(path)
+        if working_dir and not base.is_absolute():
+            base = Path(working_dir) / path
         if not base.exists():
             return ToolResult(False, "", f"path not found: {path}")
 

@@ -52,11 +52,11 @@ class ToolRegistry:
             for t in self._tools.values()
         ]
 
-    async def execute(self, name: str, **kwargs) -> ToolResult:
+    async def execute(self, name: str, working_dir: str | None = None, **kwargs) -> ToolResult:
         tool = self.get(name)
         try:
             result = await asyncio.wait_for(
-                tool.execute(**kwargs),
+                tool.execute(working_dir=working_dir, **kwargs),
                 timeout=self._timeout,
             )
             return result
