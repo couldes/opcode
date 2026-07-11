@@ -1,10 +1,14 @@
 import argparse
+import asyncio
 import os
 import sys
 from datetime import date
 from pathlib import Path
 
 from opcode_cli.agent.agent import Agent
+from opcode_cli.subagent.repo import RoleRepository
+from opcode_cli.subagent.runner import SubAgentRunner
+from opcode_cli.subagent.task_manager import BackgroundTaskManager
 from opcode_cli.agent.plan_mode import PlanMode
 from opcode_cli.commands.builtin import register_all as register_commands
 from opcode_cli.commands.builtin._deps import CommandDeps
@@ -39,6 +43,7 @@ from opcode_cli.skills import SkillRegistry, SkillsLoader, SkillsManager
 from opcode_cli.tools.install_skill import InstallSkillTool
 from opcode_cli.tools.load_skill import LoadSkillTool
 from opcode_cli.tools.run_isolated import RunIsolatedSkillTool
+from opcode_cli.tools.agent_tool import AgentTool
 from opcode_cli.provider.manager import ProviderManager
 from opcode_cli.session.archiver import SessionArchiver
 from opcode_cli.session.cleanup import cleanup as cleanup_sessions
@@ -211,6 +216,24 @@ def main() -> None:
         )
         hook_runner = HookRunner(hooks, base_ctx)
 
+    # 子 Agent 系统初始化
+    sub_agent_result_queue: asyncio.Queue = asyncio.Queue()
+    role_repo = RoleRepository()
+    role_repo.load_and_register(os.getcwd())
+
+    task_manager = BackgroundTaskManager()
+
+    sub_runner = SubAgentRunner(
+        provider=provider,
+        base_registry=registry,
+        role_repo=role_repo,
+        task_manager=task_manager,
+        result_queue=sub_agent_result_queue,
+        permission_checker=permission_checker,
+        hook_runner=hook_runner,
+        project_root=os.getcwd(),
+    )
+
     agent = Agent(
         provider, registry,
         max_iterations=args.max_iterations,
@@ -224,6 +247,7 @@ def main() -> None:
         memory_updater=memory_updater,
         skills_manager=skills_manager,
         hook_runner=hook_runner,
+        sub_agent_result_queue=sub_agent_result_queue,
     )
     plan_mode = PlanMode(registry, injector)
     agent.set_plan_mode(plan_mode)
@@ -237,6 +261,7 @@ def main() -> None:
         project_memory_dir=Path(project_root) / ".opcode" / "memory",
         user_memory_dir=Path.home() / ".opcode" / "memory",
         skills_manager=skills_manager,
+        task_manager=task_manager,
     )
     register_commands(command_registry, command_deps)
 
@@ -255,6 +280,12 @@ def main() -> None:
         skills_manager=skills_manager,
     ))
     skills_manager.register_commands(command_registry)
+
+    # 注册 Agent 工具
+    agent_tool = AgentTool()
+    agent_tool.set_runner(sub_runner)
+    agent_tool._parent_messages_ref = agent.messages
+    registry.register(agent_tool)
 
     app = OpcodeApp(agent, command_registry)
     app.run()
