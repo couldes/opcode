@@ -12,3 +12,4 @@ class CommandDeps:
     project_memory_dir: Path
     user_memory_dir: Path
     skills_manager: object | None = None  # SkillsManager instance
+    task_manager: object | None = None  # BackgroundTaskManager instance

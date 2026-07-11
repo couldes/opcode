@@ -33,6 +33,36 @@ def make_status_command(deps: CommandDeps) -> Command:
             f"  Est. total: {ctx_total:,} tokens",
             f"  Session:    {session_id}",
         ]
+
+        # 后台子 Agent 任务
+        task_mgr = deps.task_manager
+        if task_mgr is not None:
+            all_tasks = task_mgr.list_all()
+            if all_tasks:
+                lines.append("")
+                lines.append("[bold]Background Tasks[/bold]")
+                for t in all_tasks:
+                    status_icon = {
+                        "pending": "⏳",
+                        "running": "🔄",
+                        "completed": "✅",
+                        "failed": "❌",
+                        "cancelled": "⏹",
+                    }.get(t.status, "?")
+                    duration = ""
+                    if t.started_at:
+                        import time
+                        elapsed = int(time.time() - t.started_at)
+                        m, s = divmod(elapsed, 60)
+                        duration = f" {m}m{s:02d}s"
+                    token_info = ""
+                    if t.input_tokens or t.output_tokens:
+                        token_info = f"  {t.input_tokens:,} in / {t.output_tokens:,} out"
+                    lines.append(
+                        f"  {status_icon} {t.task_id}  {t.agent_name}  "
+                        f"{t.status}{duration}{token_info}"
+                    )
+
         return "\n".join(lines)
 
     return Command(
