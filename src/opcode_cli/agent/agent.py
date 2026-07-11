@@ -47,6 +47,9 @@ class Agent:
         memory_updater: object | None = None,
         skills_manager: object | None = None,
         hook_runner: object | None = None,
+        initial_messages: list[Message] | None = None,
+        system_prompt_override: str | None = None,
+        sub_agent_result_queue: asyncio.Queue | None = None,
     ) -> None:
         self._provider = provider
         self._registry = registry
@@ -65,10 +68,13 @@ class Agent:
         self._memory_updater = memory_updater
         self._skills_manager = skills_manager
         self._hook_runner = hook_runner
+        self._system_prompt_override = system_prompt_override
+        self._sub_agent_result_queue = sub_agent_result_queue
         self._permission_response: asyncio.Event | None = None
         self._permission_decision: str = ""
         self._session_active: bool = False
-        self.messages: list[Message] = []
+        self._is_fork = initial_messages is not None
+        self.messages: list[Message] = list(initial_messages) if initial_messages else []
 
     @property
     def messages_list(self) -> list[Message]:
@@ -159,8 +165,8 @@ class Agent:
             return
         self._cancelled.clear()
 
-        # --- Hook: session_start (first run only) ---
-        if not self._session_active and self._hook_runner:
+        # --- Hook: session_start (first run only, skip for fork) ---
+        if not self._session_active and self._hook_runner and not self._is_fork:
             self._session_active = True
             await self._hook_runner.fire("session_start", {
                 "provider_type": type(self._provider).__name__,
@@ -183,6 +189,12 @@ class Agent:
             if self._cancelled.is_set():
                 yield DoneEvent(finish_reason="cancelled")
                 return
+
+            # --- Poll sub-agent results before each iteration ---
+            if self._sub_agent_result_queue:
+                while not self._sub_agent_result_queue.empty():
+                    event = self._sub_agent_result_queue.get_nowait()
+                    yield event
 
             # 记录本迭代前的消息数，用于迭代末存档
             msg_count_before = len(self.messages)
@@ -210,7 +222,9 @@ class Agent:
             tools = self._build_tools()
 
             system_text = ""
-            if self._builder:
+            if self._system_prompt_override is not None:
+                system_text = self._system_prompt_override
+            elif self._builder:
                 system_text = self._builder.get_system_text(self._env_context)
 
             chat_messages = list(self.messages)
@@ -288,7 +302,7 @@ class Agent:
                         self._archiver.append(new_messages)
                 if self._memory_updater:
                     self._memory_updater.update_async(self.messages, self._provider)
-                yield DoneEvent(finish_reason="stop")
+                yield DoneEvent(finish_reason="stop", content=collector.content)
                 return
 
             any_unknown = any(

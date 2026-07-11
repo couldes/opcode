@@ -84,6 +84,17 @@ class CompressionSkippedEvent:
     reason: str  # "broken" | "too_few_messages" | "under_threshold"
 
 
+@dataclass
+class SubAgentResultEvent:
+    task_id: str
+    agent_name: str
+    success: bool
+    output: str
+    input_tokens: int
+    output_tokens: int
+    error: str | None
+
+
 AgentEvent = (
     TextDelta
     | ThinkingDelta
@@ -99,4 +110,5 @@ AgentEvent = (
     | OffloadEvent
     | SummarizeEvent
     | CompressionSkippedEvent
+    | SubAgentResultEvent
 )
