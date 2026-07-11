@@ -33,6 +33,17 @@ class WorktreeManager:
     def base_path(self) -> Path:
         return self._worktrees_base
 
+    async def start_stale_cleanup_task(
+        self, ttl_seconds: float = 86400, interval_seconds: float = 3600,
+    ) -> None:
+        """Start periodic cleanup of expired worktrees in background."""
+        from opcode_cli.worktree.cleanup import CleanupScheduler
+
+        scheduler = CleanupScheduler(
+            self, ttl_seconds=ttl_seconds, interval_seconds=interval_seconds,
+        )
+        await scheduler.start()
+
     async def create(self, name: str, base_ref: str = "") -> WorktreeInfo:
         """创建 Worktree，目录已存在时快速恢复。
 

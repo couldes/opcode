@@ -2,15 +2,15 @@ import pytest
 from pathlib import Path
 
 from opcode_cli.commands import CommandRegistry, dispatch, ParsedCommand, parse
-from opcode_cli.commands.builtin import register_all
-from opcode_cli.commands.builtin._deps import CommandDeps
-from opcode_cli.commands.builtin.help_cmd import make_help_command
-from opcode_cli.commands.builtin.review_cmd import make_review_command
-from opcode_cli.commands.builtin.plan_cmd import make_plan_command
-from opcode_cli.commands.builtin.do_cmd import make_do_command
-from opcode_cli.commands.builtin.clear_cmd import make_clear_command
-from opcode_cli.commands.builtin.status_cmd import make_status_command
-from opcode_cli.commands.builtin.memory_cmd import make_memory_command
+from opcode_cli.commands.handlers import register_all
+from opcode_cli.commands.context import CommandContext
+from opcode_cli.commands.handlers.help_handler import make_help_command
+from opcode_cli.commands.handlers.review_handler import make_review_command
+from opcode_cli.commands.handlers.plan_handler import make_plan_command
+from opcode_cli.commands.handlers.do_handler import make_do_command
+from opcode_cli.commands.handlers.clear_handler import make_clear_command
+from opcode_cli.commands.handlers.status_handler import make_status_command
+from opcode_cli.commands.handlers.memory_handler import make_memory_command
 
 
 class MockUi:
@@ -67,7 +67,7 @@ class MockAgent:
 @pytest.fixture
 def deps():
     reg = CommandRegistry()
-    return CommandDeps(
+    return CommandContext(
         agent=MockAgent(),
         command_registry=reg,
         permission_checker=None,
@@ -145,14 +145,14 @@ class TestMemoryCommand:
 
 
 class TestRegisterAll:
-    def test_registers_10_commands(self, deps):
+    def test_registers_11_commands(self, deps):
         reg = CommandRegistry()
         register_all(reg, deps)
         visible = reg.list_visible()
-        assert len(visible) == 10
+        assert len(visible) == 11
         names = {c.name for c in visible}
         expected = {"help", "compact", "clear", "plan", "do", "session",
-                    "memory", "permission", "status", "review"}
+                    "memory", "permission", "status", "skill", "review"}
         assert names == expected
 
 
