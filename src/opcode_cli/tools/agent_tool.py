@@ -43,6 +43,13 @@ class AgentTool(BaseTool):
                 "description": "Execution mode. 'foreground' blocks until complete "
                 "(defined only). 'background' runs asynchronously (required for fork).",
             },
+            "isolation": {
+                "type": "string",
+                "enum": ["", "worktree"],
+                "default": "",
+                "description": "Isolation mode. 'worktree' creates a temporary "
+                "git worktree so the sub-agent works on an isolated copy of the repo.",
+            },
         },
         "required": ["type", "task"],
     }
@@ -59,6 +66,7 @@ class AgentTool(BaseTool):
         self, type: str, task: str,
         agent_name: str | None = None,
         mode: str = "foreground",
+        isolation: str = "",
     ) -> ToolResult:
         # 参数校验（无 runner 依赖）
         if type == "fork":
@@ -91,16 +99,16 @@ class AgentTool(BaseTool):
 
         if type == "fork":
             return await self._runner.run_background(
-                type="fork", agent_name=None, task=task,
+                type="fork", agent_name=None, task=task, isolation=isolation,
             )
 
         if type == "defined":
             if mode == "background":
                 return await self._runner.run_background(
-                    type="defined", agent_name=agent_name, task=task,
+                    type="defined", agent_name=agent_name, task=task, isolation=isolation,
                 )
             return await self._runner.run_foreground(
-                agent_name=agent_name, task=task,
+                agent_name=agent_name, task=task, isolation=isolation,
             )
 
         # unreachable

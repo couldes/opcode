@@ -59,6 +59,11 @@ def parse_role_file(filepath: str, source: str) -> AgentRole | None:
     if not isinstance(tools_blacklist, list):
         tools_blacklist = []
 
+    isolation = meta.get("isolation", "")
+    if isolation and isolation != "worktree":
+        logger.warning("Role '%s': unknown isolation '%s', treating as ''", name, isolation)
+        isolation = ""
+
     return AgentRole(
         name=name,
         description=description,
@@ -68,6 +73,7 @@ def parse_role_file(filepath: str, source: str) -> AgentRole | None:
         model=meta.get("model", "inherit"),
         max_turns=int(meta.get("max_turns", 10)),
         permission_mode=meta.get("permission_mode", "inherit"),
+        isolation=isolation,
         source=source,
     )
 

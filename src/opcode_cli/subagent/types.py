@@ -12,6 +12,7 @@ class AgentRole:
     model: str = "inherit"
     max_turns: int = 10
     permission_mode: str = "inherit"
+    isolation: str = ""  # "" (无隔离) 或 "worktree" (Git Worktree 隔离)
     source: str = ""
 
 

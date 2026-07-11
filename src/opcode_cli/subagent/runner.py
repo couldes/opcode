@@ -31,6 +31,8 @@ class SubAgentRunner:
         permission_checker: PermissionChecker | None = None,
         hook_runner: object | None = None,
         project_root: str = "",
+        worktree_manager: object | None = None,
+        cleanup_scheduler: object | None = None,
     ):
         self._provider = provider
         self._base_registry = base_registry
@@ -40,6 +42,9 @@ class SubAgentRunner:
         self._permission_checker = permission_checker
         self._hook_runner = hook_runner
         self._project_root = project_root
+        self._worktree_manager = worktree_manager
+        self._cleanup_scheduler = cleanup_scheduler
+        self._cleanup_started = False
 
         # 引用父 Agent 的 messages（由外部设置，Fork 模式需要）
         self._parent_messages: list[Message] = []
@@ -49,7 +54,7 @@ class SubAgentRunner:
         self._parent_messages = messages
 
     async def run_foreground(
-        self, agent_name: str, task: str,
+        self, agent_name: str, task: str, isolation: str = "",
     ) -> ToolResult:
         """前台阻塞运行 Defined 子 Agent。"""
         try:
@@ -60,7 +65,7 @@ class SubAgentRunner:
                 error=f"agent role not found: '{agent_name}'",
             )
 
-        sub_agent = self._build_defined_agent(role)
+        sub_agent = await self._build_defined_agent(role, isolation_override=isolation)
 
         try:
             final_output = ""
@@ -80,7 +85,7 @@ class SubAgentRunner:
             )
 
     async def run_background(
-        self, type: str, agent_name: str | None, task: str,
+        self, type: str, agent_name: str | None, task: str, isolation: str = "",
     ) -> ToolResult:
         """后台异步运行子 Agent，支持 Defined 和 Fork。"""
         if type == "fork":
@@ -94,7 +99,7 @@ class SubAgentRunner:
                     success=False, content="",
                     error=f"agent role not found: '{agent_name}'",
                 )
-            sub_agent = self._build_defined_agent(role)
+            sub_agent = await self._build_defined_agent(role, isolation_override=isolation)
             display_name = agent_name  # type: ignore[assignment]
 
         task_id = self._task_manager.create(display_name)
@@ -109,7 +114,7 @@ class SubAgentRunner:
             content=f"Background task started: {task_id}",
         )
 
-    def _build_defined_agent(self, role: AgentRole) -> Agent:
+    async def _build_defined_agent(self, role: AgentRole, isolation_override: str = "") -> Agent:
         """构建 Defined 子 Agent：空白对话 + 受限工具 + 角色系统提示。"""
         sub_registry = build_sub_registry(self._base_registry, role, block_agent_tool=True)
 
@@ -128,14 +133,38 @@ class SubAgentRunner:
         else:
             sub_permission = self._permission_checker
 
+        # Worktree 隔离（运行时参数可覆盖角色定义）
+        effective_isolation = isolation_override or role.isolation
+        working_dir: str | None = None
+        system_prompt = role.system_prompt
+        if effective_isolation == "worktree" and self._worktree_manager is not None:
+            try:
+                from opcode_cli.worktree.manager import WorktreeManager
+                wm: WorktreeManager = self._worktree_manager  # type: ignore[assignment]
+                info = await wm.create(role.name)
+                working_dir = str(info.path)
+                system_prompt = system_prompt + (
+                    f"\n\nYour working directory is: {working_dir}"
+                )
+                logger.info("Worktree created for '%s': %s", role.name, working_dir)
+
+                # 惰性启动后台清理
+                if self._cleanup_scheduler is not None and not self._cleanup_started:
+                    self._cleanup_started = True
+                    scheduler: object = self._cleanup_scheduler
+                    await scheduler.start()  # type: ignore[union-attr]
+            except Exception as e:
+                logger.warning("Failed to create worktree for '%s', falling back to no isolation: %s", role.name, e)
+
         return Agent(
             provider=self._provider,
             registry=sub_registry,
             max_iterations=role.max_turns,
-            system_prompt_override=role.system_prompt,
+            system_prompt_override=system_prompt,
             permission_checker=sub_permission,
             sub_agent_result_queue=self._result_queue,
             hook_runner=self._hook_runner,
+            working_dir=working_dir,
         )
 
     def _build_fork_agent(self) -> Agent:

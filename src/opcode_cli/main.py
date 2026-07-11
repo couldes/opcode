@@ -54,6 +54,7 @@ from opcode_cli.tools.read_file import ReadFileTool
 from opcode_cli.tools.registry import ToolRegistry
 from opcode_cli.tools.run_command import RunCommandTool
 from opcode_cli.tools.write_file import WriteFileTool
+from opcode_cli.worktree import WorktreeManager, CleanupScheduler
 from opcode_cli.tui.app import OpcodeApp
 
 
@@ -223,6 +224,13 @@ def main() -> None:
 
     task_manager = BackgroundTaskManager()
 
+    # Worktree 隔离初始化（仅 Git 仓库）
+    worktree_manager = None
+    cleanup_scheduler = None
+    if (Path(project_root) / ".git").exists():
+        worktree_manager = WorktreeManager(Path(project_root))
+        cleanup_scheduler = CleanupScheduler(worktree_manager)
+
     sub_runner = SubAgentRunner(
         provider=provider,
         base_registry=registry,
@@ -232,6 +240,8 @@ def main() -> None:
         permission_checker=permission_checker,
         hook_runner=hook_runner,
         project_root=os.getcwd(),
+        worktree_manager=worktree_manager,
+        cleanup_scheduler=cleanup_scheduler,
     )
 
     agent = Agent(
