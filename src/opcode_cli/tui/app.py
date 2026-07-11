@@ -15,6 +15,7 @@ from opcode_cli.agent.events import (
     ErrorEvent,
     OffloadEvent,
     PermissionPromptEvent,
+    SubAgentResultEvent,
     SummarizeEvent,
     TextDelta,
     ThinkingDelta,
@@ -388,6 +389,14 @@ class OpcodeApp(App):
                             "[dim]Compression skipped: summarizer broken[/dim]",
                             classes="tool-status",
                         ))
+                elif isinstance(agent_event, SubAgentResultEvent):
+                    status_icon = "OK" if agent_event.success else "FAIL"
+                    await chat.mount(Static(
+                        f"[dim]{status_icon} Sub-agent '{agent_event.agent_name}' "
+                        f"({agent_event.task_id}) completed "
+                        f"({agent_event.input_tokens:,} in / {agent_event.output_tokens:,} out)[/dim]",
+                        classes="tool-status",
+                    ))
                 elif isinstance(agent_event, ErrorEvent):
                     assistant.update(f"[bold green]opcode[/bold green]\n[bold red]Error: {agent_event.message}[/bold red]")
                     error_occurred = True
