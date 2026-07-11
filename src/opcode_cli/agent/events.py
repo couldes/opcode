@@ -95,6 +95,14 @@ class SubAgentResultEvent:
     error: str | None
 
 
+@dataclass
+class TeamApprovalEvent:
+    msg_id: str
+    sender: str
+    plan_summary: str
+    task_ids: list
+
+
 AgentEvent = (
     TextDelta
     | ThinkingDelta
@@ -111,4 +119,5 @@ AgentEvent = (
     | SummarizeEvent
     | CompressionSkippedEvent
     | SubAgentResultEvent
+    | TeamApprovalEvent
 )

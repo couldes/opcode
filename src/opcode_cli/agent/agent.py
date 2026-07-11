@@ -51,6 +51,11 @@ class Agent:
         system_prompt_override: str | None = None,
         sub_agent_result_queue: asyncio.Queue | None = None,
         working_dir: str | None = None,
+        team_mailbox: object | None = None,
+        team_approval_guard: object | None = None,
+        team_member_name: str = "",
+        team_lead_name: str = "",
+        team_context_save_path: str = "",
     ) -> None:
         self._provider = provider
         self._registry = registry
@@ -77,6 +82,11 @@ class Agent:
         self._session_active: bool = False
         self._is_fork = initial_messages is not None
         self.messages: list[Message] = list(initial_messages) if initial_messages else []
+        self._team_mailbox = team_mailbox
+        self._team_approval_guard = team_approval_guard
+        self._team_member_name = team_member_name
+        self._team_lead_name = team_lead_name
+        self._team_context_save_path = team_context_save_path
 
     @property
     def messages_list(self) -> list[Message]:
@@ -198,6 +208,11 @@ class Agent:
                     event = self._sub_agent_result_queue.get_nowait()
                     yield event
 
+            # --- Poll team mailbox ---
+            if self._team_mailbox:
+                for event in self._poll_team_mailbox():
+                    yield event
+
             # 记录本迭代前的消息数，用于迭代末存档
             msg_count_before = len(self.messages)
 
@@ -221,7 +236,19 @@ class Agent:
                 except Exception as e:
                     yield ErrorEvent(message=f"MCP init error: {e}")
 
+            # --- Coordinator mode: strip write tools each iteration ---
+            _saved_registry = None
+            if getattr(self, '_team_coordinator', None) is not None:
+                coordinator = self._team_coordinator
+                if coordinator.is_active():
+                    _saved_registry = self._registry
+                    base_registry = getattr(self, '_team_base_registry', self._registry)
+                    self._registry = coordinator.strip_tools(base_registry)
+
             tools = self._build_tools()
+
+            if _saved_registry is not None:
+                self._registry = _saved_registry
 
             system_text = ""
             if self._system_prompt_override is not None:
@@ -447,6 +474,71 @@ class Agent:
                 })
 
         yield DoneEvent(finish_reason="max_iterations")
+
+    def _poll_team_mailbox(self) -> list:
+        """轮询团队邮箱，处理协议消息。返回需要 yield 的事件列表。"""
+        from opcode_cli.agent.events import TeamApprovalEvent
+        from opcode_cli.provider.base import Message as ProviderMessage
+
+        events: list = []
+        mailbox = self._team_mailbox
+        msgs = mailbox.read_all(unread_only=True)
+
+        for msg in msgs:
+            if msg.protocol == "approval_response":
+                if self._team_approval_guard:
+                    guard = self._team_approval_guard
+                    guard.approval_status = msg.extra.get("decision", "rejected")
+                    guard.approval_comments = msg.extra.get("comments", "")
+                    guard.approval_conditions = msg.extra.get("conditions", [])
+
+            elif msg.protocol == "approval_request":
+                # Lead 收到审批请求 → 事件通知 TUI
+                events.append(TeamApprovalEvent(
+                    msg_id=msg.msg_id,
+                    sender=msg.sender,
+                    plan_summary=msg.extra.get("plan_summary", ""),
+                    task_ids=msg.extra.get("task_ids", []),
+                ))
+
+            elif msg.protocol == "task_assignment":
+                task_text = msg.body
+                self.messages.append(ProviderMessage(role="user", content=task_text))
+
+            mailbox.mark_read(msg.msg_id)
+
+        return events
+
+    def save_team_context(self) -> None:
+        """序列化当前 messages 和 tracker 到团队上下文文件。"""
+        import json
+        from datetime import datetime, timezone
+
+        if not self._team_context_save_path:
+            return
+
+        tracker_summary = {}
+        if hasattr(self._tracker, 'summary'):
+            tracker_summary = dict(self._tracker.summary)
+
+        raw_messages = []
+        for m in self.messages:
+            if hasattr(m, 'role') and hasattr(m, 'content'):
+                raw_messages.append({"role": m.role, "content": m.content})
+            elif isinstance(m, dict):
+                raw_messages.append(m)
+
+        data = {
+            "member_name": self._team_member_name,
+            "messages": raw_messages,
+            "tracker_summary": tracker_summary,
+            "serialized_at": datetime.now(timezone.utc).isoformat(),
+        }
+        path = self._team_context_save_path
+        from pathlib import Path
+        Path(path).parent.mkdir(parents=True, exist_ok=True)
+        with open(path, "w", encoding="utf-8") as f:
+            json.dump(data, f, indent=2, ensure_ascii=False, default=str)
 
     def _is_unknown_tool(self, name: str) -> bool:
         try:

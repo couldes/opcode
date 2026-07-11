@@ -17,6 +17,7 @@ from opcode_cli.agent.events import (
     PermissionPromptEvent,
     SubAgentResultEvent,
     SummarizeEvent,
+    TeamApprovalEvent,
     TextDelta,
     ThinkingDelta,
     ToolCallStart,
@@ -358,6 +359,18 @@ class OpcodeApp(App):
                     inp.focus()
                     await prompt.remove()
                     self._agent.respond_to_permission(decision)
+                elif isinstance(agent_event, TeamApprovalEvent):
+                    # 显示审批请求通知
+                    task_ids_str = ", ".join(agent_event.task_ids) if agent_event.task_ids else "none"
+                    approval_notice = Static(
+                        f"[bold cyan][TEAM][/bold cyan] Approval request from "
+                        f"[bold]{agent_event.sender}[/bold]: "
+                        f"{agent_event.plan_summary[:120]} "
+                        f"(tasks: {task_ids_str})",
+                        classes="tool-status",
+                    )
+                    await chat.mount(approval_notice)
+                    chat.scroll_end(animate=False)
                 elif isinstance(agent_event, DoneEvent):
                     reason = agent_event.finish_reason
                     if reason == "cancelled":
