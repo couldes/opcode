@@ -1,15 +1,5 @@
-from __future__ import annotations
+"""Backward-compat re-export of CommandDeps → CommandContext."""
 
-from dataclasses import dataclass
-from pathlib import Path
+from opcode_cli.commands.context import CommandContext
 
-
-@dataclass
-class CommandDeps:
-    agent: object  # Agent instance
-    command_registry: object  # CommandRegistry instance
-    permission_checker: object | None  # PermissionChecker instance
-    project_memory_dir: Path
-    user_memory_dir: Path
-    skills_manager: object | None = None  # SkillsManager instance
-    task_manager: object | None = None  # BackgroundTaskManager instance
+CommandDeps = CommandContext
