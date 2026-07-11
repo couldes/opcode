@@ -1,10 +1,11 @@
-import json
 from collections.abc import AsyncIterator
+import json
 
 from openai import AsyncOpenAI
 
 from opcode_cli.config import ProviderConfig
 from opcode_cli.provider.base import BaseProvider, Message, StreamChunk
+from opcode_cli.provider.serialization import build_openai_input
 
 
 class OpenAIProvider(BaseProvider):
@@ -26,7 +27,7 @@ class OpenAIProvider(BaseProvider):
         openai_messages: list[dict] = []
         if system:
             openai_messages.append({"role": "system", "content": system})
-        openai_messages.extend(self._convert_message(m) for m in messages)
+        openai_messages.extend(build_openai_input(messages))
 
         kwargs: dict = {
             "model": self._model,
@@ -85,29 +86,3 @@ class OpenAIProvider(BaseProvider):
                     )
                 yield StreamChunk(finish_reason=finish_reason)
 
-    def _convert_message(self, m: Message) -> dict:
-        if m.role == "tool":
-            return {
-                "role": "tool",
-                "tool_call_id": m.tool_call_id,
-                "content": m.content,
-            }
-
-        if m.tool_calls:
-            return {
-                "role": "assistant",
-                "content": m.content or None,
-                "tool_calls": [
-                    {
-                        "id": tc.id,
-                        "type": "function",
-                        "function": {
-                            "name": tc.name,
-                            "arguments": json.dumps(tc.input),
-                        },
-                    }
-                    for tc in m.tool_calls
-                ],
-            }
-
-        return {"role": m.role, "content": m.content}

@@ -1,10 +1,10 @@
-import json
 from collections.abc import AsyncIterator
 
 import httpx
 
 from opcode_cli.config import ProviderConfig
 from opcode_cli.provider.base import BaseProvider, Message, StreamChunk
+from opcode_cli.provider.serialization import build_anthropic_messages
 
 
 CACHE_CONTROL_MARKER = "<!-- cache_control: ephemeral -->"
@@ -40,23 +40,7 @@ class AnthropicProvider(BaseProvider):
                 system_text = "\n".join(m.content for m in system_msgs)
 
         chat_messages = [m for m in messages if m.role != "system"]
-        converted = [self._convert_message(m) for m in chat_messages]
-        merged: list[dict] = []
-        for msg in converted:
-            if (
-                merged
-                and msg.get("role") == "user"
-                and isinstance(msg.get("content"), list)
-                and msg["content"]
-                and msg["content"][0].get("type") == "tool_result"
-                and merged[-1].get("role") == "user"
-                and isinstance(merged[-1].get("content"), list)
-                and merged[-1]["content"]
-                and merged[-1]["content"][0].get("type") == "tool_result"
-            ):
-                merged[-1]["content"].extend(msg["content"])
-            else:
-                merged.append(msg)
+        merged = build_anthropic_messages(chat_messages)
 
         body: dict = {
             "model": self._model,
@@ -172,30 +156,3 @@ class AnthropicProvider(BaseProvider):
                 elif event_type == "message_stop":
                     break
 
-    def _convert_message(self, m: Message) -> dict:
-        if m.role == "tool":
-            return {
-                "role": "user",
-                "content": [
-                    {
-                        "type": "tool_result",
-                        "tool_use_id": m.tool_call_id,
-                        "content": m.content,
-                    }
-                ],
-            }
-
-        if m.tool_calls:
-            blocks: list[dict] = []
-            if m.content:
-                blocks.append({"type": "text", "text": m.content})
-            for tc in m.tool_calls:
-                blocks.append({
-                    "type": "tool_use",
-                    "id": tc.id,
-                    "name": tc.name,
-                    "input": tc.input,
-                })
-            return {"role": "assistant", "content": blocks}
-
-        return {"role": m.role, "content": m.content}
