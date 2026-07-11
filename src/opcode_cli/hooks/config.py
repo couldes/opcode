@@ -6,17 +6,31 @@ from typing import Any
 
 import yaml
 
-from opcode_cli.hooks.types import HookAction, HookCondition, HookDefinition
+from opcode_cli.hooks.types import (
+    ConditionGroup,
+    ConditionRule,
+    HookAction,
+    HookCondition,
+    HookDefinition,
+)
 
 logger = logging.getLogger(__name__)
 
 KNOWN_EVENTS = frozenset({
+    # Lifecycle
+    "startup", "shutdown",
     "session_start", "session_end", "session_idle",
-    "iteration_start", "iteration_end", "compression",
+    "turn_start", "turn_end",
+    "pre_send", "post_receive",
+    # Iteration
+    "iteration_start", "iteration_end",
+    # User/assistant
     "user_input", "assistant_response",
+    # Tool
     "tool_pre_execute", "tool_post_execute",
     "tool_permission_denied", "tool_error",
-    "config_changed", "error",
+    # System
+    "compression", "config_changed", "error",
 })
 
 VALID_ACTION_TYPES = frozenset({"command", "prompt", "http", "agent"})
@@ -67,27 +81,104 @@ def validate_hook(raw: dict) -> list[str]:
             f"hook '{name}': tool_pre_execute event cannot use background: true"
         )
 
-    # if.mode validation
+    # Condition validation (legacy + new format)
     if "if" in raw:
         cond = raw["if"]
-        if isinstance(cond, dict) and "mode" in cond:
-            if cond["mode"] not in ("all", "any"):
-                errors.append(
-                    f"hook '{name}': if.mode must be 'all' or 'any', got '{cond['mode']}'"
-                )
+        if not isinstance(cond, dict):
+            errors.append(f"hook '{name}': 'if' must be a dict")
+        else:
+            _validate_condition_block(name, cond, errors)
 
     return errors
+
+
+def _validate_condition_block(name: str, cond: dict, errors: list[str]) -> None:
+    """Validate condition block. Supports legacy and new format."""
+    has_legacy = "mode" in cond or "match" in cond
+    has_new = any(k in cond for k in ("all", "any"))
+
+    if has_legacy and "mode" in cond and cond["mode"] not in ("all", "any"):
+        errors.append(
+            f"hook '{name}': if.mode must be 'all' or 'any', got '{cond['mode']}'"
+        )
+
+    if has_new:
+        for mode_key in ("all", "any"):
+            if mode_key not in cond:
+                continue
+            rules = cond[mode_key]
+            if not isinstance(rules, list):
+                errors.append(
+                    f"hook '{name}': if.{mode_key} must be a list, got {type(rules).__name__}"
+                )
+                continue
+            for i, rule in enumerate(rules):
+                if not isinstance(rule, dict):
+                    errors.append(
+                        f"hook '{name}': if.{mode_key}[{i}] must be a dict"
+                    )
+                    continue
+                if "field" not in rule:
+                    errors.append(
+                        f"hook '{name}': if.{mode_key}[{i}] missing 'field'"
+                    )
+                if "operator" in rule and rule["operator"] not in ("==", "!=", "=~", "~="):
+                    errors.append(
+                        f"hook '{name}': if.{mode_key}[{i}] invalid operator "
+                        f"'{rule['operator']}', expected one of: ==, !=, =~, ~="
+                    )
+
+
+def _parse_condition_block(cond_raw: dict) -> HookCondition:
+    """Parse condition block, supporting both legacy and new group format."""
+    # New format: all/any as a list of rules
+    for mode_key in ("all", "any"):
+        if mode_key in cond_raw and isinstance(cond_raw[mode_key], list):
+            rules_raw = cond_raw[mode_key]
+            rules = [
+                ConditionRule(
+                    field=r.get("field", ""),
+                    operator=r.get("operator", "=="),
+                    value=r.get("value", ""),
+                )
+                for r in rules_raw
+                if isinstance(r, dict)
+            ]
+            # Check for sibling groups
+            groups: list[ConditionGroup] = []
+            for other_key in ("all", "any"):
+                if other_key == mode_key:
+                    continue
+                if other_key in cond_raw and isinstance(cond_raw[other_key], list):
+                    sub_rules = [
+                        ConditionRule(
+                            field=r.get("field", ""),
+                            operator=r.get("operator", "=="),
+                            value=r.get("value", ""),
+                        )
+                        for r in cond_raw[other_key]
+                        if isinstance(r, dict)
+                    ]
+                    groups.append(ConditionGroup(mode=other_key, rules=sub_rules))
+
+            return HookCondition(
+                mode=mode_key,
+                match={},
+                group=ConditionGroup(mode=mode_key, rules=rules, groups=groups),
+            )
+
+    # Legacy format
+    return HookCondition(
+        mode=cond_raw.get("mode", "all"),
+        match=cond_raw.get("match", {}),
+    )
 
 
 def _raw_to_hook(raw: dict) -> HookDefinition:
     action_raw = raw.get("action", {})
     condition = None
     if "if" in raw and raw["if"]:
-        cond_raw = raw["if"]
-        condition = HookCondition(
-            mode=cond_raw.get("mode", "all"),
-            match=cond_raw.get("match", {}),
-        )
+        condition = _parse_condition_block(raw["if"])
 
     action = HookAction(
         type=action_raw.get("type", ""),

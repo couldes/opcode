@@ -1,4 +1,6 @@
 from opcode_cli.hooks.types import (
+    ConditionGroup,
+    ConditionRule,
     HookAction,
     HookCondition,
     HookContext,
@@ -10,6 +12,8 @@ from opcode_cli.hooks.config import load_hooks
 from opcode_cli.hooks.runner import HookRunner
 
 __all__ = [
+    "ConditionGroup",
+    "ConditionRule",
     "HookAction",
     "HookCondition",
     "HookContext",

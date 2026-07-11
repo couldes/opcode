@@ -4,9 +4,26 @@ from dataclasses import dataclass, field
 
 
 @dataclass
+class ConditionRule:
+    """A single condition rule with explicit operator."""
+    field: str
+    operator: str = "=="  # "==" | "!=" | "=~" | "~="
+    value: str = ""
+
+
+@dataclass
+class ConditionGroup:
+    """Composable condition group with all/any logic."""
+    mode: str = "all"  # "all" | "any"
+    rules: list[ConditionRule] = field(default_factory=list)
+    groups: list[ConditionGroup] = field(default_factory=list)
+
+
+@dataclass
 class HookCondition:
     mode: str = "all"  # "all" | "any"
     match: dict[str, str] = field(default_factory=dict)
+    group: ConditionGroup | None = None  # new format, takes precedence
 
 
 @dataclass

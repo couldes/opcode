@@ -3,7 +3,7 @@ from __future__ import annotations
 import fnmatch
 import re
 
-from opcode_cli.hooks.types import HookCondition
+from opcode_cli.hooks.types import ConditionGroup, HookCondition
 
 
 def _resolve_field(data: dict, path: str) -> str:
@@ -29,11 +29,48 @@ def _match_pattern(value: str, pattern: str) -> bool:
     return fnmatch.fnmatch(value, pattern)
 
 
+def _match_operator(value: str, operator: str, pattern: str) -> bool:
+    if operator == "==":
+        return value == pattern
+    if operator == "!=":
+        return value != pattern
+    if operator == "=~":
+        return bool(re.search(pattern, value))
+    if operator == "~=":
+        return fnmatch.fnmatch(value, pattern)
+    # fallback: glob match
+    return fnmatch.fnmatch(value, pattern)
+
+
+def match_group(group: ConditionGroup, context_data: dict) -> bool:
+    """Evaluate a ConditionGroup against context data."""
+    results: list[bool] = []
+
+    for rule in group.rules:
+        field_value = _resolve_field(context_data, rule.field)
+        results.append(_match_operator(field_value, rule.operator, rule.value))
+
+    for sub_group in group.groups:
+        results.append(match_group(sub_group, context_data))
+
+    if not results:
+        return True
+    if group.mode == "any":
+        return any(results)
+    return all(results)
+
+
 def match_condition(
     condition: HookCondition | None, context_data: dict
 ) -> bool:
     if condition is None:
         return True
+
+    # New format: ConditionGroup takes precedence
+    if condition.group is not None:
+        return match_group(condition.group, context_data)
+
+    # Legacy format
     if not condition.match:
         return True
 
