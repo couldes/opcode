@@ -12,6 +12,7 @@ from opcode_cli.agent.events import (
     ToolResultEvent,
 )
 from opcode_cli.agent.plan_mode import PlanMode
+from opcode_cli.agent.snapshot import SnapshotManager
 
 __all__ = [
     "Agent",
@@ -19,6 +20,7 @@ __all__ = [
     "DoneEvent",
     "ErrorEvent",
     "PlanMode",
+    "SnapshotManager",
     "ProgressEvent",
     "TextDelta",
     "ThinkingDelta",

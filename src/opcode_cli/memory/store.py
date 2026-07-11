@@ -38,10 +38,14 @@ def _generate_frontmatter(note: MemoryNote) -> str:
 
 
 class MemoryStore:
-    """记忆文件的 CRUD 操作。"""
+    """单路径记忆文件的 CRUD 操作。"""
 
     def __init__(self, base_dir: Path) -> None:
         self._base_dir = base_dir
+
+    @property
+    def base_dir(self) -> Path:
+        return self._base_dir
 
     def _file_path(self, name: str, mem_type: MemoryType) -> Path:
         return self._base_dir / mem_type.value / f"{name}.md"
@@ -107,3 +111,48 @@ class MemoryStore:
 
         notes.sort(key=lambda n: n.updated_at, reverse=True)
         return notes
+
+
+class DualPathMemoryStore:
+    """双路径记忆存储，项目级覆盖用户级同名文件。
+
+    用户级: ~/.opcode/memory/{type}/
+    项目级: .opcode/memory/{type}/
+    项目级同名文件优先返回。
+    """
+
+    def __init__(self, project_dir: Path, user_dir: Path) -> None:
+        self._project_store = MemoryStore(project_dir)
+        self._user_store = MemoryStore(user_dir)
+
+    @property
+    def project_store(self) -> MemoryStore:
+        return self._project_store
+
+    @property
+    def user_store(self) -> MemoryStore:
+        return self._user_store
+
+    def read(self, name: str, mem_type: MemoryType) -> MemoryNote | None:
+        """项目级优先，项目无匹配时回退用户级。"""
+        note = self._project_store.read(name, mem_type)
+        if note is not None:
+            return note
+        return self._user_store.read(name, mem_type)
+
+    def list_all(self) -> list[MemoryNote]:
+        """合并双路径，项目级同名条目覆盖用户级。"""
+        project_notes = self._project_store.list_all()
+        user_notes = self._user_store.list_all()
+
+        seen: set[tuple[str, MemoryType]] = {
+            (n.name, n.type) for n in project_notes
+        }
+        merged = list(project_notes)
+        for note in user_notes:
+            if (note.name, note.type) not in seen:
+                merged.append(note)
+                seen.add((note.name, note.type))
+
+        merged.sort(key=lambda n: n.updated_at, reverse=True)
+        return merged

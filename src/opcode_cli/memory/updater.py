@@ -46,6 +46,9 @@ Rules:
 """
 
 
+MEMORY_EXTRACTION_INTERVAL = 5
+
+
 class MemoryUpdater:
     """LLM 驱动的异步记忆更新。"""
 
@@ -63,14 +66,22 @@ class MemoryUpdater:
         # Separate indexes for project and user level
         self._project_index = index
         self._user_index = MemoryIndex(user_memory_dir)
+        # Extraction frequency control
+        self._last_extraction_msg_count: int = 0
 
     def update_async(
         self, messages: list[Message], provider: BaseProvider | None,
     ) -> asyncio.Task | None:
-        """创建异步后台任务更新记忆。"""
+        """创建异步后台任务更新记忆（受频率控制）。"""
         if provider is None:
             return None
 
+        # Only extract every N messages
+        msg_count = len(messages)
+        if msg_count - self._last_extraction_msg_count < MEMORY_EXTRACTION_INTERVAL:
+            return None
+
+        self._last_extraction_msg_count = msg_count
         return asyncio.create_task(self._run_update(messages, provider))
 
     async def _run_update(

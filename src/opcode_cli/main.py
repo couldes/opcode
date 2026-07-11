@@ -10,8 +10,8 @@ from opcode_cli.subagent.repo import RoleRepository
 from opcode_cli.subagent.runner import SubAgentRunner
 from opcode_cli.subagent.task_manager import BackgroundTaskManager
 from opcode_cli.agent.plan_mode import PlanMode
-from opcode_cli.commands.builtin import register_all as register_commands
-from opcode_cli.commands.builtin._deps import CommandDeps
+from opcode_cli.commands.context import CommandContext
+from opcode_cli.commands.handlers import register_all as register_commands
 from opcode_cli.commands.registry import CommandRegistry
 from opcode_cli.context import ContextManager
 from opcode_cli.config import load_config
@@ -293,7 +293,7 @@ def main() -> None:
 
     # 命令系统初始化
     command_registry = CommandRegistry()
-    command_deps = CommandDeps(
+    command_deps = CommandContext(
         agent=agent,
         command_registry=command_registry,
         permission_checker=permission_checker,
