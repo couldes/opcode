@@ -52,5 +52,7 @@ plan.md
 task.md
 checklist.md
 experience/
+.opcode/history/
 .opcode/memory/
+.opcode/offload/
 .opcode/sessions/
