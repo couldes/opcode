@@ -61,7 +61,7 @@ def test_offload():
         Message(role="tool", content=large_content, name="read_file", tool_call_id="t1"),
     ]
 
-    records = mgr.check(messages)
+    new_messages, records = mgr.check(messages)
 
     assert len(records) >= 1, f"Expected at least 1 offload, got {len(records)}"
     rec = records[0]
@@ -74,9 +74,9 @@ def test_offload():
     saved_content = offload_file.read_text(encoding="utf-8")
     assert saved_content == large_content, "Saved content doesn't match original"
 
-    # Verify message content was replaced with preview
-    assert "Content offloaded to" in messages[1].content, "Message should have offload notice"
-    assert messages[1].offloaded, "Message should be marked as offloaded"
+    # Verify message content was replaced with preview (on the returned copy)
+    assert "Content offloaded to" in new_messages[1].content, "Message should have offload notice"
+    assert new_messages[1].offloaded, "Message should be marked as offloaded"
 
     print(f"  [PASS] F3 Offload: {len(records)} tool result(s) offloaded to {rec.file_path}")
 

@@ -107,7 +107,14 @@ class TestMemoryUpdater:
                     finish_reason="stop",
                 )
 
+        # 至少需要 MEMORY_EXTRACTION_INTERVAL (5) 条消息才能触发提取
         messages = [
+            Message(role="user", content="msg1"),
+            Message(role="assistant", content="r1"),
+            Message(role="user", content="msg2"),
+            Message(role="assistant", content="r2"),
+            Message(role="user", content="msg3"),
+            Message(role="assistant", content="r3"),
             Message(role="user", content="I prefer short answers"),
             Message(role="assistant", content="OK, I'll keep it short"),
         ]
