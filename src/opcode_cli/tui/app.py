@@ -1,104 +1,25 @@
 import asyncio
 import sys
+from pathlib import Path
 
 from textual.app import App, ComposeResult
 from textual.containers import VerticalScroll
-from textual.widgets import Static
-
-from pathlib import Path
 
 from opcode_cli.agent.agent import Agent
 from opcode_cli.commands import CommandRegistry, dispatch, get_completions, parse
-from opcode_cli.agent.events import (
-    CompressionSkippedEvent,
-    DoneEvent,
-    ErrorEvent,
-    OffloadEvent,
-    PermissionPromptEvent,
-    SubAgentResultEvent,
-    SummarizeEvent,
-    TeamApprovalEvent,
-    TextDelta,
-    ThinkingDelta,
-    ToolCallStart,
-    ToolCallInput,
-    ToolResultEvent,
+from opcode_cli.tui.timeline import TimelineRenderer
+from opcode_cli.tui.widgets import (
+    NotificationNode,
+    StatusBar,
+    UserMsgNode,
 )
 from opcode_cli.tui.widgets.chat_input import OpcodeChatInput
-from opcode_cli.tui.widgets.inline_permission import PermissionWidget
-
-
-class ThinkingToggle(Static):
-    """Clickable toggle for thinking content."""
-
-    def __init__(self, content_widget: Static) -> None:
-        super().__init__("", classes="thinking-toggle")
-        self._expanded = True
-        self._content = content_widget
-
-    def on_click(self) -> None:
-        self._expanded = not self._expanded
-        if self._expanded:
-            self._content.remove_class("hidden")
-            self.update("[dim][-] Thinking (click to collapse)[/dim]")
-        else:
-            self._content.add_class("hidden")
-            self.update("[dim][+] Thinking (click to expand)[/dim]")
-
-
-class StatusBar(Static):
-    """显示当前模式标记：[DEFAULT] / [PLAN]"""
-
-    def __init__(self) -> None:
-        super().__init__("[reverse] DEFAULT [/reverse]", id="status-bar")
 
 
 class OpcodeApp(App):
 
-    CSS = """
-    #chat {
-        height: 1fr;
-        overflow-y: auto;
-        border: none;
-        padding: 0 1;
-    }
-    .user-msg {
-        margin: 1 0 0 0;
-    }
-    .assistant-msg {
-        margin: 0 0 0 0;
-    }
-    .thinking-text {
-        margin: 0 0 0 2;
-        padding: 0 1;
-        height: auto;
-    }
-    .thinking-toggle {
-        margin: 0;
-        padding: 0 1;
-        height: 1;
-        color: $text-disabled;
-    }
-    .hidden {
-        display: none;
-    }
-    .tool-status {
-        margin: 0 0 0 0;
-    }
-    #status-bar {
-        dock: bottom;
-        height: 1;
-        margin: 0 1;
-    }
-    #user-input {
-        dock: bottom;
-        margin: 0 1;
-        border: solid $primary;
-        height: auto;
-        min-height: 3;
-        max-height: 12;
-    }
-    """
+    AUTO_FOCUS = "#user-input"
+    CSS_PATH = "styles.tcss"
 
     BINDINGS = [
         ("ctrl+c", "quit", "Quit"),
@@ -115,24 +36,47 @@ class OpcodeApp(App):
 
     def compose(self) -> ComposeResult:
         with VerticalScroll(id="chat", can_focus=False):
-            yield Static("Welcome to opcode. Type /help for commands, /exit to quit.\nPress Enter to send, Shift+Enter for new line.")
+            yield UserMsgNode("[bold green]Welcome to opcode.[/bold green]\nType /help for commands, /exit to quit.")
         yield StatusBar()
         yield OpcodeChatInput(work_dir=str(Path.cwd()), id="user-input")
 
     def on_mount(self) -> None:
-        self.query_one("#user-input", OpcodeChatInput).focus()
+        self._focus_input()
+        # Belt-and-suspenders: AUTO_FOCUS only activates after first keypress
+        # (app_focus becomes True). Defer a second focus attempt until after
+        # the initial render so focus survives timing variations.
+        self.call_after_refresh(self._focus_input)
 
-    def _on_key(self, event) -> None:
+    def _focus_input(self) -> None:
+        try:
+            inp = self.query_one("#user-input", OpcodeChatInput)
+            inp.focus()
+            inp.scroll_visible(animate=False)
+        except Exception:
+            pass
+
+    async def _on_key(self, event) -> None:
         if event.key == "escape":
             self._agent.cancel()
             event.stop()
             return
 
-        inp = self.query_one("#user-input", OpcodeChatInput)
-        if not inp.has_focus and not inp.disabled and event.character:
-            inp.focus()
-            inp.insert(event.character)
-            event.stop()
+        if event.is_printable:
+            try:
+                inp = self.query_one("#user-input", OpcodeChatInput)
+                if not inp.has_focus and not inp.disabled:
+                    inp.focus()
+                    inp.insert(event.character)
+                    event.stop()
+                    return
+            except Exception:
+                pass
+
+        # Do NOT call super()._on_key(event) here.
+        # Textual's _get_dispatch_methods yields both OpcodeApp._on_key
+        # and App._on_key from the MRO, and _on_message calls BOTH.
+        # Calling super() would trigger the default _on_key a second time,
+        # causing _check_bindings to fire twice per keypress.
 
     def action_copy_response(self) -> None:
         if self._last_response:
@@ -150,8 +94,11 @@ class OpcodeApp(App):
     def _update_status_bar(self) -> None:
         mode = self.get_mode()
         try:
-            bar = self.query_one("#status-bar", Static)
-            bar.update(f"[reverse] {mode} [/reverse]")
+            bar = self.query_one("#status-bar", StatusBar)
+            bar.update_mode(mode)
+            usage = self.get_token_usage()
+            if usage:
+                bar.update_tokens(usage.get("input_tokens", 0) + usage.get("output_tokens", 0))
         except Exception:
             pass
 
@@ -174,7 +121,7 @@ class OpcodeApp(App):
         elif len(matches) > 1:
             names = "  ".join(f"/{m}" for m in matches)
             asyncio.ensure_future(
-                chat.mount(Static(f"[dim]{names}[/dim]", classes="tool-status"))
+                chat.mount(NotificationNode(names))
             )
             asyncio.ensure_future(chat.scroll_end(animate=False))
 
@@ -185,7 +132,6 @@ class OpcodeApp(App):
         return "DEFAULT"
 
     async def _cleanup_mcp(self) -> None:
-        """关闭 MCP 连接，避免退出时报 async generator 错误。"""
         mcp_manager = getattr(self._agent, "_mcp_manager", None)
         if mcp_manager is not None:
             try:
@@ -194,7 +140,6 @@ class OpcodeApp(App):
                 pass
 
     def _on_exit_app(self) -> None:
-        """Ctrl+C 退出时清理 MCP 资源。"""
         mcp_manager = getattr(self._agent, "_mcp_manager", None)
         if mcp_manager is not None:
             try:
@@ -206,7 +151,19 @@ class OpcodeApp(App):
         cmd_lower = value.lower().strip()
         inp = self.query_one("#user-input", OpcodeChatInput)
 
-        # 系统外前置命令（不在 registry 中）
+        # --- Handle pending permission (y/s/d/n typed in the input box) ---
+        perm = getattr(inp, "_pending_permission", None)
+        if perm is not None and not perm.is_done:
+            if perm.resolve(cmd_lower):
+                inp._pending_permission = None
+                inp.text = ""
+                inp.disabled = True  # re-lock while agent continues
+                return
+            # Invalid key — clear the input so the user can retry
+            inp.text = ""
+            inp.focus()
+            return
+
         if cmd_lower in ("/exit", "/quit"):
             await self._cleanup_mcp()
             self.exit()
@@ -226,7 +183,6 @@ class OpcodeApp(App):
             inp.focus()
             return
 
-        # 命令分流：命中 → 本地分发
         if self._command_registry is not None:
             parsed = parse(value, self._command_registry)
             if parsed is not None:
@@ -234,159 +190,39 @@ class OpcodeApp(App):
                 inp.focus()
                 return
 
-        # 不是命令 → 送入 Agent
         await self._process_agent_input(value)
 
     async def _process_agent_input(self, value: str) -> None:
         inp = self.query_one("#user-input", OpcodeChatInput)
         chat = self.query_one("#chat", VerticalScroll)
         inp.disabled = True
+        # Clear stray content inserted by TextArea._on_key dispatch after our
+        # Enter handler already cleared the text (double-dispatch side effect).
+        inp.text = ""
 
-        await chat.mount(Static(f"[bold cyan]• {value}[/bold cyan]", classes="user-msg"))
+        await chat.mount(UserMsgNode(value))
         chat.scroll_end(animate=False)
 
-        buf = ""
-        thinking_buf = ""
-        error_occurred = False
-        tool_status_widgets: dict[str, Static] = {}
-
-        assistant = Static("", classes="assistant-msg")
-        await chat.mount(assistant)
-
-        thinking_text = Static("", classes="thinking-text hidden")
-        await chat.mount(thinking_text)
-        thinking_toggle: ThinkingToggle | None = None
-
-        chat.scroll_end(animate=False)
-
-        def render() -> str:
-            lines = ["[bold green]opcode[/bold green]"]
-            if buf:
-                lines.append(buf)
-            return "\n".join(lines)
+        renderer = TimelineRenderer(chat, input_widget=inp)
 
         try:
-            async for agent_event in self._agent.run(value):
-                if isinstance(agent_event, TextDelta):
-                    buf += agent_event.content
-                    assistant.update(render())
-                elif isinstance(agent_event, ThinkingDelta):
-                    thinking_buf += agent_event.content
-                    thinking_text.update(f"[dim italic]{thinking_buf}[/dim italic]")
-                    if thinking_toggle is None:
-                        thinking_text.remove_class("hidden")
-                        thinking_toggle = ThinkingToggle(thinking_text)
-                        await chat.mount(thinking_toggle)
-                elif isinstance(agent_event, ToolCallStart):
-                    status = Static(
-                        f"[dim]calling {agent_event.name}...[/dim]",
-                        classes="tool-status",
-                    )
-                    tool_status_widgets[agent_event.tool_id] = status
-                    await chat.mount(status)
-                elif isinstance(agent_event, ToolCallInput):
-                    pass
-                elif isinstance(agent_event, ToolResultEvent):
-                    w = tool_status_widgets.get(agent_event.tool_id)
-                    if w is not None:
-                        icon = "OK" if agent_event.result.success else "FAIL"
-                        w.update(f"[dim]{icon} {agent_event.name}[/dim]")
-                elif isinstance(agent_event, PermissionPromptEvent):
-                    if not sys.stdin.isatty():
-                        self._agent.respond_to_permission("deny")
-                        continue
-                    widget = PermissionWidget(
-                        tool_name=agent_event.tool_name,
-                        description=agent_event.description,
-                        future=agent_event.future,
-                    )
-                    await chat.mount(widget)
-                    chat.scroll_end(animate=False)
-                    widget.focus()
-                    try:
-                        await asyncio.wait_for(agent_event.future, timeout=60.0)
-                    except asyncio.TimeoutError:
-                        if not agent_event.future.done():
-                            agent_event.future.set_result("deny")
-                    inp.focus()
-                elif isinstance(agent_event, TeamApprovalEvent):
-                    # 显示审批请求通知
-                    task_ids_str = ", ".join(agent_event.task_ids) if agent_event.task_ids else "none"
-                    approval_notice = Static(
-                        f"[bold cyan][TEAM][/bold cyan] Approval request from "
-                        f"[bold]{agent_event.sender}[/bold]: "
-                        f"{agent_event.plan_summary[:120]} "
-                        f"(tasks: {task_ids_str})",
-                        classes="tool-status",
-                    )
-                    await chat.mount(approval_notice)
-                    chat.scroll_end(animate=False)
-                elif isinstance(agent_event, DoneEvent):
-                    reason = agent_event.finish_reason
-                    if reason == "cancelled":
-                        if not buf:
-                            assistant.update("[bold green]opcode[/bold green]\n[dim](cancelled)[/dim]")
-                    elif reason == "max_iterations":
-                        suffix = "\n[dim][max iterations reached][/dim]"
-                        assistant.update(render() + suffix)
-                    elif reason == "unknown_tool":
-                        assistant.update("[bold green]opcode[/bold green]\n[bold red]Error: repeated unknown tool calls[/bold red]")
-                    elif reason == "stream_error":
-                        pass
-                    elif agent_event.content:
-                        assistant.update(f"[bold green]opcode[/bold green]\n{agent_event.content}")
-                elif isinstance(agent_event, OffloadEvent):
-                    await chat.mount(Static(
-                        f"[dim]Offloaded {agent_event.count} tool results to disk[/dim]",
-                        classes="tool-status",
-                    ))
-                elif isinstance(agent_event, SummarizeEvent):
-                    await chat.mount(Static(
-                        f"[dim]Summarized {agent_event.summarized_count} messages "
-                        f"({agent_event.total_before // 1000}K -> {agent_event.total_after // 1000}K tokens)[/dim]",
-                        classes="tool-status",
-                    ))
-                elif isinstance(agent_event, CompressionSkippedEvent):
-                    if agent_event.reason == "broken":
-                        await chat.mount(Static(
-                            "[dim]Compression skipped: summarizer broken[/dim]",
-                            classes="tool-status",
-                        ))
-                elif isinstance(agent_event, SubAgentResultEvent):
-                    status_icon = "OK" if agent_event.success else "FAIL"
-                    await chat.mount(Static(
-                        f"[dim]{status_icon} Sub-agent '{agent_event.agent_name}' "
-                        f"({agent_event.task_id}) completed "
-                        f"({agent_event.input_tokens:,} in / {agent_event.output_tokens:,} out)[/dim]",
-                        classes="tool-status",
-                    ))
-                elif isinstance(agent_event, ErrorEvent):
-                    assistant.update(f"[bold green]opcode[/bold green]\n[bold red]Error: {agent_event.message}[/bold red]")
-                    error_occurred = True
-
-                chat.scroll_end(animate=False)
-
+            await renderer.render(self._agent.run(value))
         except Exception:
-            assistant.update("[bold green]opcode[/bold green]\n[bold red]Error: unexpected error[/bold red]")
-            error_occurred = True
+            await chat.mount(
+                NotificationNode("[red]Error: unexpected error[/red]")
+            )
         finally:
-            if not buf and not thinking_buf and not error_occurred:
-                assistant.update("[bold green]opcode[/bold green]\n[dim](no response)[/dim]")
-            if thinking_buf and thinking_toggle is not None:
-                thinking_toggle._expanded = False
-                thinking_text.add_class("hidden")
-                thinking_toggle.update("[dim][+] Thinking (click to expand)[/dim]")
-            elif not thinking_buf:
-                thinking_text.remove()
-            self._last_response = buf
+            self._last_response = renderer._buf
             inp.disabled = False
             inp.focus()
+            chat.scroll_end(animate=False)
+            self._update_status_bar()
 
     # --- UiController implementation ---
 
     async def display_message(self, text: str) -> None:
         chat = self.query_one("#chat", VerticalScroll)
-        await chat.mount(Static(text, classes="tool-status"))
+        await chat.mount(NotificationNode(text))
         chat.scroll_end(animate=False)
 
     async def send_to_agent(self, text: str) -> None:
@@ -423,7 +259,7 @@ class OpcodeApp(App):
         new_chat = VerticalScroll(id="chat", can_focus=False)
         await self.mount(new_chat, before=self.query_one("#status-bar"))
         await new_chat.mount(
-            Static("Chat cleared. Type /help for commands, /exit to quit.")
+            NotificationNode("Chat cleared. Type /help for commands, /exit to quit.")
         )
 
     def _enter_plan_mode(self) -> None:

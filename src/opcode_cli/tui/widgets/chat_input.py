@@ -34,6 +34,14 @@ class OpcodeChatInput(TextArea):
         self._history_file = Path(self._work_dir) / _HISTORY_DIR / "input_history.jsonl"
         self._load_history()
 
+    def _on_focus(self, event) -> None:
+        super()._on_focus(event)
+        self.border_title = "Type / for commands, Enter to send"
+
+    def _on_blur(self, event) -> None:
+        super()._on_blur(event)
+        self.border_title = ""
+
     # === T38: Input History ===
 
     def _load_history(self) -> None:
@@ -186,7 +194,11 @@ class OpcodeChatInput(TextArea):
             self._navigate_history(1)
             return
 
-        await super()._on_key(event)
+        # Do NOT call super()._on_key(event) here.
+        # Textual's _get_dispatch_methods yields both OpcodeChatInput._on_key
+        # and TextArea._on_key from the MRO; _on_message calls BOTH.
+        # Calling super() would cause TextArea._on_key to fire twice per key,
+        # doubling character insertion (visible as CJK 2-char deletion).
 
     def action_insert_newline(self) -> None:
         self.insert("\n")

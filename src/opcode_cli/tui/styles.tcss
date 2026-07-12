@@ -1,0 +1,79 @@
+/* ── Chat area ── */
+#chat {
+    height: 1fr;
+    overflow-y: auto;
+    border: none;
+    padding: 0 1;
+}
+
+/* ── User messages ── */
+.user-msg {
+    margin: 1 0 0 0;
+}
+
+/* ── Text nodes ── */
+.text-node {
+    margin: 0;
+}
+
+/* ── Thinking ── */
+.thinking-node {
+    margin: 0 0 0 2;
+    padding: 0 1;
+}
+
+/* ── Tool calls ── */
+.tool-call {
+    margin: 0;
+}
+
+.tool-pending {
+    color: $text-disabled;
+}
+
+.tool-error {
+    color: $error;
+}
+
+/* ── Todo list ── */
+.todo-list {
+    margin: 0;
+}
+
+/* ── Notifications ── */
+.notification {
+    margin: 0;
+}
+
+/* ── Permission ── */
+.permission {
+    margin: 0;
+}
+
+.permission-allowed {
+    color: $success;
+}
+
+.permission-denied {
+    color: $error;
+}
+
+/* ── Status bar ── */
+#status-bar {
+    dock: bottom;
+    height: 1;
+    margin: 0 1;
+}
+
+/* ── Input area ── */
+#user-input {
+    dock: bottom;
+    margin: 0 1;
+    border: solid ansi_bright_black;
+    height: auto;
+    min-height: 4;
+    max-height: 14;
+}
+#user-input:focus {
+    border: solid $accent;
+}
