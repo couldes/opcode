@@ -85,7 +85,10 @@ class MCPServerManager:
         )
 
     async def disconnect_all(self) -> None:
-        await self._global_exit_stack.aclose()
+        try:
+            await self._global_exit_stack.aclose()
+        except RuntimeError:
+            pass
         self._sessions.clear()
         self._registered = False
 

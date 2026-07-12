@@ -2,6 +2,7 @@ import asyncio
 from collections.abc import AsyncIterator
 
 import pytest
+from pydantic import BaseModel
 
 from opcode_cli.agent.agent import Agent
 from opcode_cli.agent.events import (
@@ -17,18 +18,18 @@ from opcode_cli.tools.base import BaseTool, ToolResult
 from opcode_cli.tools.registry import ToolRegistry
 
 
+class EchoParams(BaseModel):
+    msg: str = ""
+
+
 class EchoTool(BaseTool):
     name = "echo"
     description = "Echo tool"
-    parameters = {
-        "type": "object",
-        "properties": {"msg": {"type": "string"}},
-        "required": ["msg"],
-    }
-    read_only = True
+    params_model = EchoParams
+    category = None  # will fall back to ToolCategory.COMMAND
 
-    async def execute(self, msg: str = "", working_dir: str | None = None) -> ToolResult:
-        return ToolResult(True, f"echo: {msg}")
+    async def execute(self, params: EchoParams, working_dir: str | None = None) -> ToolResult:
+        return ToolResult(True, f"echo: {params.msg}")
 
 
 class MockProvider(BaseProvider):

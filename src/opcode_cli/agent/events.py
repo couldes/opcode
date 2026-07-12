@@ -10,11 +10,11 @@ from opcode_cli.tools.base import ToolResult
 
 @dataclass(frozen=True)
 class StreamText:
-    text: str
+    content: str
 
 @dataclass(frozen=True)
 class ThinkingText:
-    text: str
+    content: str
 
 @dataclass(frozen=True)
 class ToolCallStart:

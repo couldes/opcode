@@ -1,3 +1,4 @@
+import json
 from collections.abc import AsyncIterator
 
 from opcode_cli.agent.events import (

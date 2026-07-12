@@ -58,7 +58,7 @@ class TestMCPToolAdapter:
             parameters={},
             session_provider=session_provider,
         )
-        assert adapter.read_only is False
+        assert adapter.is_read_only is False
 
     @pytest.mark.asyncio
     async def test_execute_respects_timeout(self, session_provider):

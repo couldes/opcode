@@ -18,13 +18,19 @@ from opcode_cli.tools.registry import ToolRegistry
 
 
 class FakeTool:
-    def __init__(self, name, read_only=False):
+    def __init__(self, name, is_read_only=False):
         self.name = name
         self.description = f"Fake {name}"
         self.parameters = {"type": "object", "properties": {}, "required": []}
-        self.read_only = read_only
+        self.is_read_only = is_read_only
+        self.category = None
+        self.is_concurrency_safe = False
+        self.is_system_tool = False
 
-    async def execute(self, **kwargs):
+    def get_schema(self, fmt="anthropic"):
+        return {"name": self.name, "description": self.description, "input_schema": self.parameters}
+
+    async def execute(self, params=None, working_dir=None):
         from opcode_cli.tools.base import ToolResult
         return ToolResult(success=True, content=f"{self.name} result")
 
@@ -169,21 +175,24 @@ class TestAgentTool:
     def test_defined_requires_agent_name(self):
         tool = AgentTool()
         import asyncio
-        result = asyncio.run(tool.execute(type="defined", task="do stuff"))
+        from opcode_cli.tools.agent_tool import AgentToolParams
+        result = asyncio.run(tool.execute(AgentToolParams(type="defined", task="do stuff")))
         assert result.success is False
         assert "agent_name" in result.error
 
     def test_fork_rejects_foreground(self):
         tool = AgentTool()
         import asyncio
-        result = asyncio.run(tool.execute(type="fork", task="do stuff", mode="foreground"))
+        from opcode_cli.tools.agent_tool import AgentToolParams
+        result = asyncio.run(tool.execute(AgentToolParams(type="fork", task="do stuff", mode="foreground")))
         assert result.success is False
         assert "background" in result.error.lower()
 
     def test_unknown_type(self):
         tool = AgentTool()
         import asyncio
-        result = asyncio.run(tool.execute(type="invalid", task="do stuff"))
+        from opcode_cli.tools.agent_tool import AgentToolParams
+        result = asyncio.run(tool.execute(AgentToolParams(type="invalid", task="do stuff")))
         assert result.success is False
         assert "Unknown" in result.error
 

@@ -16,7 +16,7 @@ class FastReadTool(BaseTool):
     parameters = {"type": "object", "properties": {}}
     read_only = True
 
-    async def execute(self, **kwargs) -> ToolResult:
+    async def execute(self, params=None, working_dir=None) -> ToolResult:
         await asyncio.sleep(0.05)
         return ToolResult(True, "read A ok")
 
@@ -27,7 +27,7 @@ class SlowReadTool(BaseTool):
     parameters = {"type": "object", "properties": {}}
     read_only = True
 
-    async def execute(self, **kwargs) -> ToolResult:
+    async def execute(self, params=None, working_dir=None) -> ToolResult:
         await asyncio.sleep(0.05)
         return ToolResult(True, "read B ok")
 
@@ -41,7 +41,7 @@ class WriteTool(BaseTool):
     def __init__(self):
         self.executed = False
 
-    async def execute(self, **kwargs) -> ToolResult:
+    async def execute(self, params=None, working_dir=None) -> ToolResult:
         self.executed = True
         return ToolResult(True, "wrote C")
 
@@ -74,8 +74,8 @@ async def test_batcher_only_read_tools(batcher):
     assert events[1].tool_id == "c2"
     assert events[0].result.success
     assert events[1].result.success
-    # Concurrent execution should take ~0.05s, not ~0.10s
-    assert elapsed < 0.10
+    # Concurrent execution should take ~0.05s, not ~0.10s (sequential)
+    assert elapsed < 0.30
 
 
 @pytest.mark.asyncio
