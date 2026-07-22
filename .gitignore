@@ -44,7 +44,6 @@ opcode.yaml
 
 # Claude
 .claude/
-CLAUDE.md
 
 # Project (not version controlled)
 spec.md
