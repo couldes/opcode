@@ -17,7 +17,7 @@ load_app_config = load_config
 
 __all__ = [
     'AppConfig',
-    'ProviderConfig', 
+    'ProviderConfig',
     'find_config_file',
     'load_config',
     'resolve_context_window',

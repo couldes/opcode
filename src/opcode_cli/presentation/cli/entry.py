@@ -4,7 +4,7 @@ Refactored from main.py to use dependency injection container pattern.
 Maintains backward compatibility with all existing command-line arguments.
 
 Based on Pi platform best practices, while preserving opcode's excellent
-existing mechanisms (ContextManager F3/F4 compression + CircuitBreaker + 
+existing mechanisms (ContextManager F3/F4 compression + CircuitBreaker +
 RecoveryState; PermissionChecker 9-layer chain).
 """
 
@@ -31,7 +31,7 @@ Examples:
   opcode --mode strict      # Enable strict permission mode
 """,
     )
-    
+
     parser.add_argument(
         "-c", "--config",
         default=None,
@@ -54,7 +54,7 @@ Examples:
         choices=["strict", "default", "accept-edits", "permissive"],
         help="Permission mode (default: from config or 'default')",
     )
-    
+
     # Team collaboration flags
     parser.add_argument(
         "--team",
@@ -72,33 +72,33 @@ Examples:
         choices=["auto", "tmux", "iterm2", "in-process"],
         help="Member runtime backend (default: auto-detect)",
     )
-    
+
     # Evaluation subcommands
     subparsers = parser.add_subparsers(dest="command", help="Evaluation commands")
-    
+
     # Eval subcommand
     eval_parser = subparsers.add_parser("eval", help="Run evaluation benchmark")
     eval_parser.add_argument("test_case", help="Test case name or directory")
     eval_parser.add_argument("--output", help="Output file path")
-    
+
     # Eval-report subcommand
     report_parser = subparsers.add_parser(
-        "eval-report", 
+        "eval-report",
         help="Generate evaluation report"
     )
     report_parser.add_argument("input_dir", help="Input directory with eval results")
     report_parser.add_argument("--output", help="Output report file")
-    
+
     return parser.parse_args()
 
 
 def create_application_container(args: argparse.Namespace) -> Container:
     """Create and configure the application container.
-    
+
     This function initializes all services in the correct dependency order.
     Based on Pi's architecture patterns while preserving opcode's excellent
     existing mechanisms.
-    
+
     Returns:
         Fully configured Container with all services
     """
@@ -108,23 +108,23 @@ def create_application_container(args: argparse.Namespace) -> Container:
     except (FileNotFoundError, ValueError) as e:
         print(f"Config error: {e}", file=sys.stderr)
         sys.exit(1)
-    
+
     # Create base container
     container = Container()
     container.register('config', lambda: config)
-    
+
     # Layer 1: Provider Manager
     from opcode_cli.provider.manager import ProviderManager
-    
+
     manager = ProviderManager(config)
     provider_name = args.provider or config.default
     provider = manager.get_provider(provider_name)
     container.register('provider', lambda: provider, singleton=True)
-    
+
     # Layer 2: Tool Registry
     from opcode_cli.tools.registry import ToolRegistry
     registry = ToolRegistry(timeout=30.0)
-    
+
     # Register built-in tools
     from opcode_cli.tools.read_file import ReadFileTool
     from opcode_cli.tools.write_file import WriteFileTool
@@ -132,24 +132,24 @@ def create_application_container(args: argparse.Namespace) -> Container:
     from opcode_cli.tools.run_command import RunCommandTool
     from opcode_cli.tools.glob_find import GlobFindTool
     from opcode_cli.tools.grep_search import GrepSearchTool
-    
+
     registry.register(ReadFileTool())
     registry.register(WriteFileTool())
     registry.register(EditFileTool())
     registry.register(RunCommandTool())
     registry.register(GlobFindTool())
     registry.register(GrepSearchTool())
-    
+
     container.register('registry', lambda: registry, singleton=True)
-    
+
     # Layer 3: Permission Checker (9-layer chain retained ✅)
     from opcode_cli.permission.checker import PermissionChecker
     from opcode_cli.permission.dangerous import DangerousCommandDetector
-    
+
     mode_str = args.mode if args.mode else config.mode
     from opcode_cli.permission.mode import PermissionMode
     mode = PermissionMode(mode_str)
-    
+
     from opcode_cli.config import resolve_context_window
     from opcode_cli.permission.config import (
         load_rule_file,
@@ -172,7 +172,7 @@ def create_application_container(args: argparse.Namespace) -> Container:
         if (user_rules or project_rules)
         else None
     )
-    
+
     perm_checker = PermissionChecker(
         project_root=project_root,
         mode=mode,
@@ -182,7 +182,7 @@ def create_application_container(args: argparse.Namespace) -> Container:
         dangerous_detector=DangerousCommandDetector(),
     )
     container.register('permission_checker', lambda: perm_checker, singleton=True)
-    
+
     from opcode_cli.config import resolve_context_window
     from opcode_cli.context.manager import ContextManager
     from opcode_cli.context.offload import OffloadManager
@@ -207,7 +207,7 @@ def create_application_container(args: argparse.Namespace) -> Container:
         summary_engine=SummaryEngine(),
     )
     container.register('context_manager', lambda: ctx_mgr, singleton=True)
-    
+
     from datetime import date
     import os
 
@@ -297,45 +297,45 @@ def create_application_container(args: argparse.Namespace) -> Container:
 
 async def run_member_mode(args: argparse.Namespace) -> int:
     """Run as team member (non-TUI mode).
-    
+
     Simplified member mode that doesn't require TUI.
-    
+
     Args:
         args: Parsed command line arguments
-        
+
     Returns:
         Exit code (0 for success, non-zero for error)
     """
     print(f"Running member mode: team={args.team}, member={args.member}")
     print("Note: Full member mode implementation requires additional setup.")
     print("This is a placeholder - full implementation will follow team coordination protocol.")
-    
+
     # TODO: Implement full member mode with:
     # - Team configuration loading
     # - Mailbox communication
     # - Approval guard workflow
     # - Subagent execution
-    
+
     return 0
 
 
 def run_tui(args: argparse.Namespace) -> None:
     """Run the Textual TUI interface.
-    
+
     Args:
         args: Parsed command line arguments
     """
     from opcode_cli.tui.app import OpcodeApp
-    
+
     try:
         container = create_application_container(args)
-        
+
         app = OpcodeApp(
             agent=container.resolve('agent'),
             command_registry=container.resolve('command_registry'),
         )
         app.run()
-        
+
     except Exception as e:
         print(f"Application error: {e}", file=sys.stderr)
         raise
@@ -355,26 +355,26 @@ def run_eval_report(args: argparse.Namespace) -> int:
 
 def main() -> int:
     """Main entry point for Opcode CLI.
-    
+
     Routes to appropriate handler based on command line arguments.
     Uses dependency injection for service management.
-    
+
     Returns:
         Exit code (0 for success, non-zero for error)
     """
     args = parse_args()
-    
+
     # Handle evaluation subcommands (bypass full Agent initialization)
     if args.command == "eval":
         return run_eval(args)
-    
+
     if args.command == "eval-report":
         return run_eval_report(args)
-    
+
     # Member mode: direct execution without TUI
     if args.team and args.member:
         return asyncio.run(run_member_mode(args))
-    
+
     # Standard mode: TUI with full Agent initialization
     run_tui(args)
     return 0

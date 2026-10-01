@@ -1,7 +1,7 @@
 # Opcode 重构实施计划
 
-**状态**: 待执行  
-**日期**: 2025-12-19  
+**状态**: 待执行
+**日期**: 2025-12-19
 **总工时**: 74-112 小时（约 9-14 工作日）
 
 ---
@@ -54,10 +54,10 @@ touch experience/.gitkeep
    ```bash
    # 查找未使用的导入
    pylint src/opcode_cli --reports=n --unused-imports > unused_imports.txt
-   
+
    # 查找 TODO/FIXME/XXX 标记
    grep -r "TODO\|FIXME\|XXX\|HACK" src/opcode_cli --include="*.py" > todos.txt
-   
+
    # 查找长文件（>500 行）
    find src/opcode_cli -name "*.py" -exec wc -l {} + | sort -n -r | head -10
    ```
@@ -71,7 +71,7 @@ touch experience/.gitkeep
    ```bash
    # 示例：删除未使用的导入
    git checkout HEAD~1 -- src/opcode_cli/main.py
-   
+
    # 运行测试确保无破坏
    pytest tests/ -v --tb=short
    ```
@@ -97,27 +97,27 @@ touch experience/.gitkeep
 1. **更新 README.md**
    ```markdown
    ## Opcode CLI AI Assistant
-   
-   A command-line AI coding agent with multi-provider LLM support, 
+
+   A command-line AI coding agent with multi-provider LLM support,
    permission control, MCP protocol extension, and context management.
-   
+
    ### Core Features
-   
+
    - **Multi-Provider LLM**: Anthropic, OpenAI, DeepSeek, Gemini
    - **Permission Control**: 9-layer decision chain with mode matrix
    - **Context Management**: Double-threshold compression (offload+summary)
    - **Team Collaboration**: Lead-member workflow with approval guards
    - **Tool Extension**: MCP protocol support for external tools
-   
+
    ### Quick Start
-   
+
    ```bash
    python -m pip install -e .
    opcode
    ```
-   
+
    ### Architecture Overview
-   
+
    ```
    src/opcode_cli/
      ├── core/              # Domain layer: Agent, Context, Permission...
@@ -125,16 +125,16 @@ touch experience/.gitkeep
      ├── infrastructure/    # Infrastructure layer: MCP, Providers, Tools...
      └── presentation/      # Presentation layer: TUI, CLI Entry Point
    ```
-   
+
    ### Development
-   
+
    ```bash
    # Run tests
    pytest tests/ -v
-   
+
    # Type check
    mypy --strict src/opcode_cli/
-   
+
    # Format code
    black src/opcode_cli tests/
    ```
@@ -143,15 +143,15 @@ touch experience/.gitkeep
 2. **创建 ARCHITECTURE.md**
    ```markdown
    # Architecture Decision Records (ADRs)
-   
+
    ## ADR-001: Modular Layered Architecture
-   
-   **Status**: Accepted  
-   **Date**: 2025-12-19  
+
+   **Status**: Accepted
+   **Date**: 2025-12-19
    **Context**: Need to improve code maintainability through clear layer separation.
-   
+
    **Decision**: Adopt 6-layer architecture with strict dependency rules.
-   
+
    ```
    Layers (top to bottom):
    - Presentation: User interface (TUI, CLI)
@@ -161,34 +161,34 @@ touch experience/.gitkeep
    - Shared: Cross-cutting concerns (Config, Types, Utils)
    - Domain: Pure domain models (Events, Aggregates)
    ```
-   
+
    **Dependency Rules**:
    - Dependencies only point downward
    - No cyclic dependencies allowed
    - Shared layer can be imported by any layer
    - Domain layer is completely independent
-   
+
    **Consequences**:
    - ✅ Improved testability due to clear boundaries
    - ✅ Easier onboarding for new developers
    - ⚠️ More upfront design effort needed
    - ⚠️ Slight performance overhead from DI container
-   
+
    ---
-   
+
    ## ADR-002: Dependency Injection Strategy
-   
-   **Status**: Accepted  
-   **Date**: 2025-12-19  
+
+   **Status**: Accepted
+   **Date**: 2025-12-19
    **Context**: Current main.py has tight coupling between components.
-   
+
    **Decision**: Implement lightweight DI container instead of full framework.
-   
+
    **Benefits**:
    - Simplifies unit testing (mocking)
    - Reduces initialization complexity
    - Makes dependencies explicit
-   
+
    **Implementation**:
    ```python
    class Container:
@@ -234,7 +234,7 @@ touch experience/.gitkeep
          --no-paths \
          --dot \
          > call_graph.dot
-   
+
    # 可选：渲染成 PNG
    dot -Tpng call_graph.dot -o call_graph.png
    ```
@@ -243,25 +243,25 @@ touch experience/.gitkeep
    ```python
    # 简单脚本检测循环
    import re
-   
+
    with open('call_graph.dot') as f:
        content = f.read()
-   
+
    # 提取节点和边
    nodes = re.findall(r'(\w+)', content)
    edges = re.findall(r'(\w+) -> (\w+)', content)
-   
+
    # 构建图
    graph = {node: [] for node in set(nodes)}
    for src, dst in edges:
        if src in graph:
            graph[src].append(dst)
-   
+
    # DFS 检测循环
    def find_cycle(node, visited, path):
        visited.add(node)
        path.append(node)
-       
+
        for neighbor in graph.get(node, []):
            if neighbor not in visited:
                cycle = find_cycle(neighbor, visited, path)
@@ -269,10 +269,10 @@ touch experience/.gitkeep
                    return cycle
            elif neighbor in path:
                return path[path.index(neighbor):]
-       
+
        path.pop()
        return None
-   
+
    # 遍历检测
    for start_node in graph:
        cycle = find_cycle(start_node, set(), [])
@@ -323,19 +323,19 @@ touch experience/.gitkeep
    mv src/opcode_cli/memory/* src/opcode_cli/core/memory/
    mv src/opcode_cli/permission/* src/opcode_cli/core/permission/
    mv src/opcode_cli/prompt/* src/opcode_cli/core/prompt/
-   
+
    # Application layer
    mv src/opcode_cli/commands/* src/opcode_cli/application/commands/
    mv src/opcode_cli/hooks/* src/opcode_cli/application/hooks/
    mv src/opcode_cli/session/* src/opcode_cli/application/sessions/
    mv src/opcode_cli/team/* src/opcode_cli/application/team/
-   
+
    # Infrastructure layer
    mv src/opcode_cli/mcp/* src/opcode_cli/infrastructure/mcp/
    mv src/opcode_cli/provider/* src/opcode_cli/infrastructure/providers/
    mv src/opcode_cli/tools/* src/opcode_cli/infrastructure/tools/
    mv src/opcode_cli/subagent/* src/opcode_cli/infrastructure/subagent/
-   
+
    # Presentation layer
    mv src/opcode_cli/tui/* src/opcode_cli/presentation/tui/
    ```
@@ -351,11 +351,11 @@ touch experience/.gitkeep
    ```python
    # src/opcode_cli/core/__init__.py
    """Core domain logic layer"""
-   
+
    from opcode_cli.core.agent.agent import Agent
    from opcode_cli.core.context.manager import ContextManager
    from opcode_cli.core.permission.checker import PermissionChecker
-   
+
    __all__ = ['Agent', 'ContextManager', 'PermissionChecker']
    ```
 
@@ -382,43 +382,43 @@ touch experience/.gitkeep
    # src/opcode_cli/shared/di/container.py
    from typing import Any, Callable, TypeVar, Dict
    from functools import wraps
-   
+
    T = TypeVar('T')
-   
+
    class Container:
        """轻量级依赖注入容器"""
-       
+
        def __init__(self):
            self._services: Dict[str, tuple[Callable, bool]] = {}
            self._instances: Dict[str, Any] = {}
-       
+
        def register(self, name: str, factory: Callable[..., T], singleton: bool = True) -> None:
            """注册服务"""
            self._services[name] = (factory, singleton)
-       
+
        def resolve(self, name: str, **overrides) -> Any:
            """解析服务"""
            if name in overrides:
                return overrides[name]
-           
+
            if name in self._instances:
                return self._instances[name]
-           
+
            factory, _singleton = self._services[name]
            instance = factory()
-           
+
            if _singleton:
                self._instances[name] = instance
-           
+
            return instance
-   
+
        def build_from_config(self, config) -> 'Container':
            """根据配置构建完整容器"""
            container = Container()
-           
+
            # 配置层
            container.register('config', lambda: config)
-           
+
            # Provider 层
            from opcode_cli.infrastructure.providers.manager import ProviderManager
            provider_mgr = ProviderManager(config)
@@ -427,13 +427,13 @@ touch experience/.gitkeep
                lambda pm: pm.get_provider('default'),
                singleton=True
            )
-           
+
            # Registry 层
            from opcode_cli.infrastructure.tools.registry import ToolRegistry
            registry = ToolRegistry()
            # ... 注册工具
            container.register('registry', lambda: registry, singleton=True)
-           
+
            # Permission Checker
            from opcode_cli.core.permission.checker import PermissionChecker
            perm_checker = PermissionChecker(
@@ -442,7 +442,7 @@ touch experience/.gitkeep
                registry=registry,
            )
            container.register('permission_checker', lambda: perm_checker, singleton=True)
-           
+
            # Context Manager
            from opcode_cli.core.context.manager import ContextManager
            ctx_mgr = ContextManager(
@@ -451,7 +451,7 @@ touch experience/.gitkeep
                context_window=config.context_window or 128000,
            )
            container.register('context_manager', lambda: ctx_mgr, singleton=True)
-           
+
            # Agent
            from opcode_cli.core.agent.agent import Agent
            container.register(
@@ -464,7 +464,7 @@ touch experience/.gitkeep
                ),
                singleton=True
            )
-           
+
            # Commands
            from opcode_cli.application.commands.registry import CommandRegistry
            container.register(
@@ -472,7 +472,7 @@ touch experience/.gitkeep
                lambda deps: CommandRegistry(deps),
                singleton=True
            )
-           
+
            return container
    ```
 
@@ -483,7 +483,7 @@ touch experience/.gitkeep
    import argparse
    import asyncio
    from pathlib import Path
-   
+
    from opcode_cli.shared.config import load_app_config
    from opcode_cli.shared.di.container import Container
    from opcode_cli.presentation.tui.app import OpcodeApp
@@ -491,14 +491,14 @@ touch experience/.gitkeep
    from opcode_cli.infrastructure.tools.file_ops import ReadFileTool, WriteFileTool, EditFileTool
    from opcode_cli.infrastructure.tools.search_tools import GlobFindTool, GrepSearchTool
    from opcode_cli.infrastructure.tools.command import RunCommandTool
-   
+
    def create_application_container() -> Container:
        """创建应用容器并初始化所有组件"""
        config = load_app_config()
-       
+
        container = Container()
        container.register('config', lambda: config)
-       
+
        # 初始化工具注册表
        registry = ToolRegistry()
        registry.register(ReadFileTool())
@@ -508,30 +508,30 @@ touch experience/.gitkeep
        registry.register(GlobFindTool())
        registry.register(GrepSearchTool())
        container.register('registry', lambda: registry, singleton=True)
-       
+
        # 后续继续注册其他组件
        # ... 参考上面 Container.build_from_config 方法
-       
+
        return container
-   
+
    def parse_args() -> argparse.Namespace:
        parser = argparse.ArgumentParser(description="Opcode - CLI AI Coding Agent")
        parser.add_argument("-c", "--config", help="Config file path")
        parser.add_argument("-p", "--provider", help="Provider name")
        parser.add_argument("--max-iterations", type=int, default=25)
        # ... 更多参数
-       
+
        return parser.parse_args()
-   
+
    async def run_member_mode(args):
        """队员模式：直接运行而非通过 TUI"""
        # 简化版成员模式逻辑
        pass
-   
+
    def main():
        """主入口点"""
        args = parse_args()
-       
+
        # 启动队员模式或 TUI
        if hasattr(args, 'team') and args.team and hasattr(args, 'member') and args.member:
            asyncio.run(run_member_mode(args))
@@ -542,7 +542,7 @@ touch experience/.gitkeep
                command_registry=container.resolve('command_registry')
            )
            app.run()
-   
+
    if __name__ == "__main__":
        main()
    ```
@@ -584,33 +584,33 @@ touch experience/.gitkeep
    from abc import abstractmethod
    from pydantic import BaseModel
    from typing import Optional
-   
+
    class ToolResult(BaseModel):
        success: bool
        content: str
        error: Optional[str] = None
-   
+
    class BaseTool:
        """工具基类"""
-       
+
        name: str = "base_tool"
        description: str = "Base tool description"
-       
+
        @property
        @abstractmethod
        def is_read_only(self) -> bool:
            """是否为只读工具"""
            pass
-       
+
        @property
        def params_model(self) -> Optional[type[BaseModel]]:
            """参数模型"""
            return None
-       
+
        async def execute(self, params: BaseModel, working_dir: str = None) -> ToolResult:
            """执行工具"""
            pass
-       
+
        def get_schema(self, fmt: str = "anthropic") -> dict:
            """获取工具 schema"""
            pass
@@ -622,85 +622,85 @@ touch experience/.gitkeep
    from pathlib import Path
    from pydantic import Field
    from .base import BaseTool, ToolResult
-   
+
    class FileOperationParams(BaseModel):
        path: str = Field(..., description="文件路径")
-   
+
    class ReadFileParams(FileOperationParams):
        @property
        def is_read_only(self) -> bool:
            return True
-   
+
    class WriteFileParams(FileOperationParams):
        content: str = Field(..., description="写入内容")
-   
+
    class EditFileParams(FileOperationParams):
        old_content: str = Field(..., description="原始内容")
        new_content: str = Field(..., description="新内容")
-   
+
    class BaseFileSystemTool(BaseTool):
        """文件系统操作基类"""
-       
+
        permission_checker = None
-       
+
        def set_permission_checker(self, checker) -> None:
            self.permission_checker = checker
-       
+
        def validate_path(self, path: Path) -> bool:
            """验证路径权限"""
            if not self.permission_checker:
                return True
            return self.permission_checker.check(path)
-   
+
    class ReadFileTool(BaseFileSystemTool):
        name = "read_file"
        description = "Read a file from the local filesystem"
        params_model = ReadFileParams
-       
+
        @property
        def is_read_only(self) -> bool:
            return True
-       
+
        async def execute(self, params: ReadFileParams, working_dir: str = None) -> ToolResult:
            path = Path(params.path)
            if not self.validate_path(path):
                return ToolResult(success=False, content="", error="Path not allowed")
-           
+
            try:
                content = path.read_text()
                return ToolResult(success=True, content=content)
            except Exception as e:
                return ToolResult(success=False, content="", error=str(e))
-   
+
    class WriteFileTool(BaseFileSystemTool):
        name = "write_file"
        description = "Write content to a file"
        params_model = WriteFileParams
-       
+
        @property
        def is_read_only(self) -> bool:
            return False
-       
+
        async def execute(self, params: WriteFileParams, working_dir: str = None) -> ToolResult:
            path = Path(params.path)
            if not self.validate_path(path):
                return ToolResult(success=False, content="", error="Path not allowed")
-           
+
            try:
                path.write_text(params.content)
                return ToolResult(success=True, content=f"Successfully wrote to {params.path}")
            except Exception as e:
                return ToolResult(success=False, content="", error=str(e))
-   
+
    class EditFileTool(BaseFileSystemTool):
        name = "edit_file"
        description = "Edit a file using search and replace"
        params_model = EditFileParams
-       
+
        @property
        def is_read_only(self) -> bool:
            return False
-       
+
        async def execute(self, params: EditFileParams, working_dir: str = None) -> ToolResult:
            # 统一的编辑逻辑
            pass
@@ -712,49 +712,49 @@ touch experience/.gitkeep
    from pathlib import Path
    from pydantic import Field
    from .base import BaseTool, ToolResult
-   
+
    class SearchOptions(BaseModel):
        base_path: str = Field(..., description="搜索根路径")
        pattern: str = Field(..., description="匹配模式")
        max_results: int = Field(default=50, description="最大结果数")
-   
+
    class SearchResults(BaseModel):
        total_found: int
        results: list[dict]
        search_time_ms: float
-   
+
    class BaseSearchTool(BaseTool):
        """搜索工具基类"""
        params_model = SearchOptions
-       
+
        @abstractmethod
        def execute_search(self, options: SearchOptions) -> SearchResults:
            pass
-       
+
        async def execute(self, params: SearchOptions, working_dir: str = None) -> ToolResult:
            results = self.execute_search(params)
            return ToolResult(success=True, content=str(results))
-   
+
    class GlobFindTool(BaseSearchTool):
        name = "glob_find"
        description = "Find files matching glob pattern"
-       
+
        @property
        def is_read_only(self) -> bool:
            return True
-       
+
        def execute_search(self, options: SearchOptions) -> SearchResults:
            # 实现 glob 搜索
            pass
-   
+
    class GrepSearchTool(BaseSearchTool):
        name = "grep_search"
        description = "Search for text patterns in files"
-       
+
        @property
        def is_read_only(self) -> bool:
            return True
-       
+
        def execute_search(self, options: SearchOptions) -> SearchResults:
            # 实现 grep 搜索
            pass
@@ -803,10 +803,10 @@ class MemoryEntry:
     created_at: str
     content: str
     tags: List[str]
-    
+
     def to_dict(self) -> dict:
         return asdict(self)
-    
+
     @classmethod
     def from_dict(cls, data: dict) -> 'MemoryEntry':
         return cls(**data)
@@ -814,25 +814,25 @@ class MemoryEntry:
 
 class MemoryStore:
     """统一记忆存储"""
-    
+
     def __init__(self, base_dir: Path):
         self.base_dir = base_dir
         self.base_dir.mkdir(parents=True, exist_ok=True)
         self._cache: dict[str, MemoryEntry] = {}
-    
+
     def save(self, entry: MemoryEntry) -> None:
         """保存记忆"""
         path = self.base_dir / f"{entry.id}.json"
         with open(path, 'w', encoding='utf-8') as f:
             json.dump(entry.to_dict(), f, indent=2, ensure_ascii=False)
-        
+
         self._cache[entry.id] = entry
-    
+
     def get(self, id: str) -> Optional[MemoryEntry]:
         """获取记忆"""
         if id in self._cache:
             return self._cache[id]
-        
+
         path = self.base_dir / f"{id}.json"
         if path.exists():
             with open(path, encoding='utf-8') as f:
@@ -841,65 +841,65 @@ class MemoryStore:
             self._cache[id] = entry
             return entry
         return None
-    
+
     def index(self) -> List[MemoryEntry]:
         """获取索引（所有记忆）"""
         return list(self._cache.values())
-    
+
     def delete(self, id: str) -> bool:
         """删除记忆"""
         if id in self._cache:
             del self._cache[id]
-        
+
         path = self.base_dir / f"{id}.json"
         if path.exists():
             path.unlink()
             return True
         return False
-    
+
     def search(self, query: str, tags: List[str] = None) -> List[MemoryEntry]:
         """搜索记忆"""
         results = []
         query_lower = query.lower()
-        
+
         for entry in self.index():
             # 文本匹配
             if query_lower in entry.content.lower():
                 results.append(entry)
                 continue
-            
+
             # Tag 匹配
             if tags:
                 if set(tags).issubset(set(entry.tags)):
                     results.append(entry)
-        
+
         return results
 
 
 class MemoryIndex:
     """记忆索引器"""
-    
+
     def __init__(self, base_dir: Path):
         self.base_dir = base_dir
         self._index: dict[str, list[str]] = {}  # tag -> [memory_ids]
-    
+
     def add_tag(self, memory_id: str, tag: str) -> None:
         """添加标签索引"""
         if tag not in self._index:
             self._index[tag] = []
         if memory_id not in self._index[tag]:
             self._index[tag].append(memory_id)
-    
+
     def remove_tag(self, memory_id: str, tag: str) -> None:
         """移除标签索引"""
         if tag in self._index:
             if memory_id in self._index[tag]:
                 self._index[tag].remove(memory_id)
-    
+
     def get_by_tag(self, tag: str) -> List[str]:
         """根据标签获取记忆 ID 列表"""
         return self._index.get(tag, [])
-    
+
     def list_all_tags(self) -> List[str]:
         """列出所有标签"""
         return list(self._index.keys())
@@ -907,7 +907,7 @@ class MemoryIndex:
 
 class MemoryUpdater:
     """记忆更新管理器"""
-    
+
     def __init__(
         self,
         project_memory_dir: Path,
@@ -919,19 +919,19 @@ class MemoryUpdater:
         self.user_store = MemoryStore(user_memory_dir)
         self.store = store
         self.index = index
-    
+
     def merge_project_and_user(self) -> List[MemoryEntry]:
         """合并项目和用户记忆"""
         all_memories = set()
-        
+
         # 项目记忆
         for entry in self.project_store.index():
             all_memories.add(entry.id)
-        
+
         # 用户记忆
         for entry in self.user_store.index():
             all_memories.add(entry.id)
-        
+
         return [self.store.get(mid) for mid in all_memories if self.store.get(mid)]
 ```
 
@@ -963,10 +963,10 @@ class MemoryUpdater:
    # src/opcode_cli/presentation/tui/widgets/user_message.py
    from textual.widgets import Static
    from textual.css.query import NoWidgetMatches
-   
+
    class UserMsgNode(Static):
        """用户消息显示组件"""
-       
+
        CSS = """
        UserMsgNode {
            width: 100%;
@@ -974,7 +974,7 @@ class MemoryUpdater:
            padding: 1;
        }
        """
-       
+
        def __init__(self, message: str):
            super().__init__(message)
            self.mount(Static(message, classes="user-message"))
@@ -983,10 +983,10 @@ class MemoryUpdater:
    ```python
    # src/opcode_cli/presentation/tui/widgets/notification.py
    from textual.widgets import Static
-   
+
    class NotificationNode(Static):
        """通知消息组件"""
-       
+
        CSS = """
        NotificationNode {
            width: 100%;
@@ -1003,26 +1003,26 @@ class MemoryUpdater:
    from textual.app import App, ComposeResult
    from textual.containers import VerticalScroll
    from opcode_cli.core.events import AgentEvent
-   
+
    class OpcodeApp(App):
        AUTO_FOCUS = "#user-input"
        CSS_PATH = "styles.tcss"
-   
+
        def compose(self) -> ComposeResult:
            yield VerticalScroll(id="chat")
            yield StatusBar()
            yield OpcodeChatInput(id="user-input")
-   
+
        async def on_mount(self) -> None:
            """仅处理焦点和事件监听"""
            self.call_after_refresh(self._focus_input)
            asyncio.create_task(self._listen_agent_events())
-   
+
        async def _listen_agent_events(self):
            """统一的事件监听器"""
            async for event in self.agent.run("start"):
                await self.event_queue.put(event)
-   
+
        async def process_event(self, event: AgentEvent):
            """统一的事件处理器"""
            if isinstance(event, ToolExecuteEvent):
@@ -1070,7 +1070,7 @@ class MemoryUpdater:
    strict_optional = true
    disallow_untyped_defs = true
    ignore_missing_imports = true
-   
+
    [[tool.mypy.overrides]]
    module = "tests.*"
    disallow_untyped_defs = false
@@ -1080,27 +1080,27 @@ class MemoryUpdater:
    ```python
    # 示例：Type annotation improvement
    from typing import Any, Dict, List, Optional, Protocol, TypeVar
-   
+
    T = TypeVar('T')
-   
+
    class Result(Protocol[T]):
        @property
        def value(self) -> T: ...
-       
+
        @property
        def is_success(self) -> bool: ...
-   
+
    class CommandHandler:
        """命令处理器基类"""
-       
+
        def handle(self, command: str, context: CommandContext) -> Result[str]:
            """处理命令"""
            pass
-   
+
    def parse_command(text: str) -> Optional[ParsedCommand]:
        """解析命令"""
        pass
-   
+
    def execute_command(
        command: ParsedCommand,
        context: CommandContext
@@ -1113,10 +1113,10 @@ class MemoryUpdater:
    ```bash
    # 严格检查核心模块
    mypy --strict src/opcode_cli/core/
-   
+
    # 检查应用层
    mypy --strict src/opcode_cli/application/
-   
+
    # 修复发现的问题
    ```
 
@@ -1146,24 +1146,24 @@ from typing import Any, Optional
 
 class ErrorCode(Enum):
     """全局错误码"""
-    
+
     # Permission errors
     PERMISSION_DENIED = "PERM_001"
     PATH_OUTSIDE_SANDBOX = "PERM_002"
-    
+
     # Tool execution errors
     TOOL_EXECUTION_FAILED = "TOOL_001"
     TOOL_TIMEOUT = "TOOL_002"
     TOOL_VALIDATION_ERROR = "TOOL_003"
-    
+
     # Configuration errors
     CONFIG_ERROR = "CFG_001"
     PROVIDER_NOT_FOUND = "CFG_002"
-    
+
     # Context errors
     CONTEXT_OVERFLOW = "CTX_001"
     COMPRESSION_FAILED = "CTX_002"
-    
+
     # General errors
     INVALID_PARAMETER = "INV_001"
     INTERNAL_ERROR = "INT_001"
@@ -1175,7 +1175,7 @@ class OpcodeError(Exception):
     code: ErrorCode
     message: str
     details: Optional[Dict[str, Any]] = None
-    
+
     def __str__(self) -> str:
         if self.details:
             return f"[{self.code.value}] {self.message}: {self.details}"
@@ -1261,18 +1261,18 @@ def format_error_for_api(error: OpcodeError) -> dict:
    import logging
    import structlog
    from pathlib import Path
-   
+
    def setup_logger(name: str, log_file: Path) -> None:
        """设置结构化日志"""
-       
+
        # JSON file handler
        file_handler = logging.FileHandler(log_file)
        file_handler.setLevel(logging.INFO)
-       
+
        # Console handler
        console_handler = logging.StreamHandler()
        console_handler.setLevel(logging.INFO)
-       
+
        # Configure structlog
        structlog.configure(
            processors=[
@@ -1288,11 +1288,11 @@ def format_error_for_api(error: OpcodeError) -> dict:
            logger_factory=structlog.stdlib.LoggerFactory(),
            cache_logger_on_first_use=True,
        )
-   
+
    def get_logger(name: str) -> structlog.stdlib.BoundLogger:
        """获取日志实例"""
        return structlog.get_logger(name)
-   
+
    # Usage example
    log = get_logger(__name__)
    log.info(
@@ -1331,7 +1331,7 @@ def format_error_for_api(error: OpcodeError) -> dict:
    ```bash
    # Record profile
    py-spy record -o profile.svg -- python -m opcode_cli --help
-   
+
    # Analyze hot paths
    pip install flamegraph
    sudo flamegraph-profile-to-svg profile.svg > flamegraph.html
@@ -1341,7 +1341,7 @@ def format_error_for_api(error: OpcodeError) -> dict:
    ```python
    # Add decorator to functions
    from line_profiler import LineProfiler
-   
+
    @profile
    def critical_path_function(messages: list[Message]) -> str:
        """Hot path function"""
@@ -1371,7 +1371,7 @@ def format_error_for_api(error: OpcodeError) -> dict:
 
 ```bash
 mkdir -p tests/unit/core
-mkdir -p tests/unit/application  
+mkdir -p tests/unit/application
 mkdir -p tests/unit/infrastructure
 mkdir -p tests/integration
 mkdir -p tests/e2e
@@ -1394,7 +1394,7 @@ async def test_context_manager_initialization():
         session_id="test_session",
         context_window=128000,
     )
-    
+
     assert mgr.estimator is not None
     assert mgr.circuit_breaker is not None
 
@@ -1403,13 +1403,13 @@ async def test_context_manager_initialization():
 async def test_soft_threshold_compression(mocker):
     """测试软阈值触发压缩"""
     mocker.patch.object(ContextManager, '_do_compress', return_value=None)
-    
+
     mgr = ContextManager("/tmp", "test", 1000)
-    
+
     messages = [Message(role="user", content="x" * 10000)]
-    
+
     await mgr.before_request(messages)
-    
+
     # 验证压缩被调用
     ...
 
@@ -1418,13 +1418,13 @@ async def test_soft_threshold_compression(mocker):
 async def test_hard_threshold_force_compression(mocker):
     """测试硬阈值强制压缩"""
     mocker.patch.object(ContextManager, '_do_compress', return_value=None)
-    
+
     mgr = ContextManager("/tmp", "test", 1000)
-    
+
     messages = [Message(role="user", content="y" * 100000)]
-    
+
     await mgr.before_request(messages)
-    
+
     # 硬阈值应该绕过熔断器
     ...
 ```
@@ -1444,14 +1444,14 @@ async def test_agent_read_write_cycle(tmp_path):
     """测试读写文件流程"""
     test_file = tmp_path / "test.txt"
     test_file.write_text("hello world")
-    
+
     registry = ToolRegistry()
     registry.register(ReadFileTool())
-    
+
     agent = Agent(registry=registry)
-    
+
     result = await agent.run(f"read {test_file}")
-    
+
     assert "hello world" in result.content
 
 
@@ -1459,18 +1459,18 @@ async def test_agent_read_write_cycle(tmp_path):
 async def test_permission_check_chain():
     """测试权限检查链"""
     from opcode_cli.core.permission.checker import PermissionChecker
-    
+
     checker = PermissionChecker(
         project_root="/tmp",
         mode="strict",
     )
-    
+
     # Test layer 0: plan mode
     # ...
-    
+
     # Test layer 1b: dangerous command
     # ...
-    
+
     # Test layer 2: path sandbox
     # ...
 ```
@@ -1553,5 +1553,5 @@ pdoc src/opcode_cli --output-dir docs/api
 
 ---
 
-**状态**: 待执行  
+**状态**: 待执行
 **下一步**: 按 Phase 顺序依次完成任务

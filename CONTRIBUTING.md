@@ -127,11 +127,11 @@ replace with preview link             circuit breaker after 3 failures
 
 9-layer decision chain:
 ```
-Plan Mode → Read-only → Danger Blacklist → Path Sandbox 
+Plan Mode → Read-only → Danger Blacklist → Path Sandbox
 → Rule Engine → Session Allow → Mode Fallback → HITL
 ```
 
-Mode matrix: strict(default deny) → default(read_ok, write_ask) 
+Mode matrix: strict(default deny) → default(read_ok, write_ask)
 → accept-edits(commands_ask) → permissive(allow_all)
 
 ## Debugging Tips
@@ -193,5 +193,5 @@ Thank you for contributing! 🙏
 
 ---
 
-**Last Updated**: 2025-12-19  
+**Last Updated**: 2025-12-19
 **Version**: v0.2.0-refactor
