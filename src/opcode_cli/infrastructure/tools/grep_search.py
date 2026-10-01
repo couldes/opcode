@@ -1,5 +1,5 @@
 """Compatibility exports for the consolidated search tools."""
 
-from opcode_cli.tools.search_tools import GrepSearchParams, GrepSearchTool
+from .search_tools import GrepSearchParams, GrepSearchTool
 
 __all__ = ["GrepSearchParams", "GrepSearchTool"]

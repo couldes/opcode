@@ -1,5 +1,5 @@
 """Compatibility exports for the consolidated file tools."""
 
-from opcode_cli.tools.file_ops import WriteFileParams, WriteFileTool
+from .file_ops import WriteFileParams, WriteFileTool
 
 __all__ = ["WriteFileParams", "WriteFileTool"]

@@ -1,5 +1,5 @@
 """Compatibility exports for the consolidated search tools."""
 
-from opcode_cli.tools.search_tools import GlobFindParams, GlobFindTool
+from .search_tools import GlobFindParams, GlobFindTool
 
 __all__ = ["GlobFindParams", "GlobFindTool"]

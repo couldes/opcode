@@ -1,5 +1,5 @@
 """Compatibility exports for the consolidated file tools."""
 
-from opcode_cli.tools.file_ops import ReadFileParams, ReadFileTool
+from .file_ops import ReadFileParams, ReadFileTool
 
 __all__ = ["ReadFileParams", "ReadFileTool"]

@@ -1,5 +1,5 @@
 """Compatibility exports for the consolidated file tools."""
 
-from opcode_cli.tools.file_ops import EditFileParams, EditFileTool
+from .file_ops import EditFileParams, EditFileTool
 
 __all__ = ["EditFileParams", "EditFileTool"]
