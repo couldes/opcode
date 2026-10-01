@@ -191,7 +191,6 @@ python -m opcode_cli.main --help
 
 文档入口：
 
-- [重构实施计划](refactoring_plan.md)
 
 ## 技术栈
 
