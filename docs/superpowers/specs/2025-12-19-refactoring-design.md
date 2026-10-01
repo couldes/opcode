@@ -264,122 +264,87 @@ class Container:
         return container
 ```
 
-### 3.4 工具系统优化
+### 3.4 Pi 最佳实践总结与保留策略
 
-#### 合并重复实现
-
-**文件操作组**:
-```python
-# infrastructure/tools/file_ops.py
-from pydantic import BaseModel, Field
-from pathlib import Path
-from abc import abstractmethod
-from typing import Optional
-
-class FileOperationParams(BaseModel):
-    path: str = Field(..., description="文件路径")
-    
-    @property
-    def is_read_only(self) -> bool:
-        return False
-
-class ReadFileParams(FileOperationParams):
-    @property
-    def is_read_only(self) -> bool:
-        return True
-
-class WriteFileParams(FileOperationParams):
-    content: str = Field(..., description="写入内容")
-
-class EditFileParams(FileOperationParams):
-    old_content: str = Field(..., description="原始内容")
-    new_content: str = Field(..., description="新内容")
-
-class FileSystemBaseTool(Tool):
-    """文件操作基类"""
-    
-    def __init__(self, params_model: type[BaseModel]):
-        super().__init__()
-        self.params_model = params_model
-        self.permission_checker: Optional[PermissionChecker] = None
-    
-    def set_permission_checker(self, checker: PermissionChecker) -> None:
-        self.permission_checker = checker
-    
-    def validate_path(self, path: Path) -> bool:
-        if not self.permission_checker:
-            return True
-        return self.permission_checker.check(path)
-```
-
-**搜索工具组**:
-```python
-# infrastructure/tools/search_tools.py
-class SearchOptions(BaseModel):
-    base_path: str = Field(..., description="搜索根路径")
-    pattern: str = Field(..., description="匹配模式")
-    max_results: int = Field(default=50, description="最大结果数")
-
-class SearchResults(BaseModel):
-    total_found: int
-    results: list[dict[str, Any]]
-    search_time_ms: float
-
-class BaseSearchTool(Tool):
-    """搜索工具基类"""
-    
-    params_model = SearchOptions
-    
-    @abstractmethod
-    def execute_search(self, options: SearchOptions) -> SearchResults:
-        pass
-```
-
-#### 简化的注册表
-
-```python
-# infrastructure/tools/registry.py
-class ToolRegistry:
-    """简化版工具注册表，移除复杂的 defer/discover 逻辑"""
-    
-    def __init__(self, timeout: float = 30.0):
-        self._tools: dict[str, Tool] = {}
-        self._timeout = timeout
-    
-    def register(self, tool: Tool) -> None:
-        """注册工具"""
-        if tool.name in self._tools:
-            raise ValueError(f"tool already registered: {tool.name}")
-        self._tools[tool.name] = tool
-    
-    def list_tools(self) -> list[Tool]:
-        """列出所有工具"""
-        return list(self._tools.values())
-    
-    def to_anthropic_format(self) -> list[dict]:
-        """转换为 Anthropic schema"""
-        return [t.get_schema(fmt="anthropic") for t in self._tools.values()]
-    
-    def to_openai_format(self) -> list[dict]:
-        """转换为 OpenAI schema"""
-        return [t.get_schema(fmt="openai") for t in self._tools.values()]
-    
-    async def execute(self, name: str, **kwargs) -> ToolResult:
-        """统一执行器"""
-        tool = self._tools[name]
-        params = tool.params_model(**kwargs) if tool.params_model else kwargs
-        
-        try:
-            result = await asyncio.wait_for(
-                tool.execute(params),
-                timeout=self._timeout
-            )
-            return result
-        except Exception as e:
-            return ToolResult(success=False, content="", error=str(e))
-```
+在重构过程中，我们将重点**保留并优化**以下 opcode 现有的优秀实现：
 
 ---
+
+#### 3.4.1 上下文压缩机制 (ContextManager) - **优秀** ✅
+
+当前 `src/opcode_cli/context/manager.py` 已实现：
+- F3: 大工具结果先存盘（预防式 offload）
+- F4: 对话摘要生成（兜底式 compression）
+- 双阈值策略：SOFT_MARGIN(13K) + HARD_MARGIN(3K)
+- CircuitBreaker 熔断器保护
+- RecoveryState 关键上下文恢复附件
+
+✅ **评价**: 设计优秀，保持现有架构不变  
+📌 **重构策略**: 只做代码清理和单元测试补充
+
+---
+
+#### 3.4.2 权限检查机制 (PermissionChecker) - **优秀** ✅
+
+当前 `src/opcode_cli/permission/checker.py` 已实现：
+- 9-layer 决策链逐层深入，早期短路优化性能
+- Layer 3.5 Session allow set（"Don't ask again" UX 设计⭐）
+- DangerousCommandDetector 黑名单确保安全
+- Mode matrix fallback 简化配置复杂度
+
+✅ **评价**: 设计优秀，Layer 3.5 是非常好的 UX 创新  
+📌 **重构策略**: 保持结构不变，增强类型注解和测试
+
+---
+
+#### 3.4.3 TUI 交互体验 (OpcodeApp) - **优秀** ✅
+
+当前 `src/opcode_cli/tui/app.py` 已实现：
+- Widget 层次清晰：VerticalScroll(chat) + StatusBar + ChatInput
+- Plan mode UX 优秀（border title 动态变化）
+- `_on_key` 正确处理（不调用 super() 避免重复触发）
+- TimelineRenderer 优雅处理异步事件流
+
+✅ **评价**: 符合 Textual 8.x 最佳实践  
+📌 **重构策略**: 保持整体结构，细化 Widget 拆分以便复用
+
+---
+
+#### 3.4.4 工具系统 (ToolRegistry) - **良好** ⚠️
+
+当前实现支持 deferred discovery 机制，但存在重复逻辑。
+
+⚠️ **可优化点**: 
+- 文件操作工具（ReadFileTool, WriteFileTool, EditFileTool）存在重复逻辑
+- 搜索工具（GlobFindTool, GrepSearchTool）共享路径查找逻辑
+
+📌 **重构策略**: 引入 `BaseFileSystemTool`, `BaseSearchTool` 等抽象基类
+
+---
+
+## 3.5 最终架构原则
+
+基于上述分析，本次重构将遵循以下核心原则：
+
+### A. **最小改动原则**
+- ✅ 保留所有已证明的优秀机制（压缩、权限、TUI）
+- 🔄 仅清理冗余代码和改进组织
+- 🔄 引入必要的解耦和依赖注入
+
+### B. **渐进式迁移**
+1. Phase 1: 清理死代码 + 经验库建立
+2. Phase 2: 目录重组 + DI 容器引入  
+3. Phase 3: 工具整合 + 类型注解全覆盖
+4. Phase 4: 测试体系建设
+
+### C. **向后兼容**
+- CLI API 保持不变
+- 配置文件格式无需修改
+- 用户无感知重构
+
+---
+
+### 3.6 依赖注入框架设计
 
 ## 4. 详细实施计划
 
