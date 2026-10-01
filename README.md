@@ -192,8 +192,6 @@ python -m opcode_cli.main --help
 文档入口：
 
 - [重构实施计划](refactoring_plan.md)
-- [贡献指南](CONTRIBUTING.md)
-- [项目开发约束](CLAUDE.md)
 
 ## 技术栈
 
