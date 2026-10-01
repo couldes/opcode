@@ -39,6 +39,9 @@ htmlcov/
 # mypy
 .mypy_cache/
 
+# Evaluation artifacts
+runs/
+
 # Config (contains API keys)
 opcode.yaml
 

@@ -89,7 +89,7 @@ git commit -m "fix: resolve permission check deadlock issue"
 
 ## Architecture Overview
 
-See `ARCHITECTURE.md` for detailed layer design and data flow.
+The current architecture and development constraints are documented in `README.md` and `CLAUDE.md`.
 
 Key directories:
 
