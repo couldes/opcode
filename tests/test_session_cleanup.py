@@ -24,12 +24,12 @@ class TestSessionCleanup:
 
         # 创建 35 天前的 "会话文件"
         old_id = (datetime.now() - timedelta(days=35)).strftime("%Y%m%d-%H%M%S")
-        old_file = d / f"{old_id}-abcd.jsonl"
+        old_file = d / f"{old_id}-abcd1234.jsonl"
         old_file.write_text('{"role": "user", "content": "old"}\n')
 
         # 创建今天的会话文件
         new_id = datetime.now().strftime("%Y%m%d-%H%M%S")
-        new_file = d / f"{new_id}-ef01.jsonl"
+        new_file = d / f"{new_id}-ef015678.jsonl"
         new_file.write_text('{"role": "user", "content": "new"}\n')
 
         deleted = cleanup(d, max_age_days=30)

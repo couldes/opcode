@@ -79,6 +79,7 @@ class Agent:
         team_context_save_path: str = "",
         project_memory_dir: str = "",
         user_memory_dir: str = "",
+        checkpoint_manager: object | None = None,
     ) -> None:
         self._provider = provider
         self._registry = registry
@@ -116,6 +117,8 @@ class Agent:
         self._project_memory_dir = project_memory_dir
         self._user_memory_dir = user_memory_dir
         self._recall_task: asyncio.Task | None = None
+        self._checkpoint_mgr = checkpoint_manager
+        self._task_input = ""
 
     @property
     def messages_list(self) -> list[Message]:
@@ -214,6 +217,7 @@ class Agent:
             })
 
         self.messages.append(Message(role="user", content=user_input))
+        self._task_input = user_input
 
         # --- Hook: user_input ---
         if self._hook_runner:
@@ -342,20 +346,23 @@ class Agent:
                 yield DoneEvent(finish_reason="stream_error")
                 return
 
-            if isinstance(self._provider, AnthropicProvider):
-                usage = self._provider.last_usage
-                if usage:
-                    metrics = self._tracker.parse_from_response({"usage": usage})
-                    self._tracker.record(metrics)
-                    yield CacheMetricsEvent(
-                        cache_creation_input_tokens=metrics.cache_creation_input_tokens,
-                        cache_read_input_tokens=metrics.cache_read_input_tokens,
-                        input_tokens=metrics.input_tokens,
+            usage = getattr(self._provider, "last_usage", None)
+            if usage:
+                metrics = self._tracker.parse_from_response({"usage": usage})
+                self._tracker.record(metrics)
+                yield CacheMetricsEvent(
+                    cache_creation_input_tokens=metrics.cache_creation_input_tokens,
+                    cache_read_input_tokens=metrics.cache_read_input_tokens,
+                    input_tokens=metrics.input_tokens,
+                )
+                yield TokenUsageEvent(
+                    input_tokens=usage.get("input_tokens", 0),
+                    output_tokens=usage.get("output_tokens", 0),
+                )
+                if self._context_manager and usage.get("input_tokens"):
+                    self._context_manager.update_anchor(
+                        usage["input_tokens"], self.messages,
                     )
-                    if self._context_manager and usage.get("input_tokens"):
-                        self._context_manager.update_anchor(
-                            usage["input_tokens"], self.messages,
-                        )
 
             tool_calls = collector.tool_calls
 
@@ -380,6 +387,8 @@ class Agent:
                         self._archiver.append(new_messages)
                 if self._memory_updater:
                     self._extract_memories_async()
+                if self._checkpoint_mgr:
+                    self._checkpoint_mgr.maybe_checkpoint(self, iteration=iteration, force=True)
                 yield DoneEvent(finish_reason="stop", content=collector.content)
                 return
 
@@ -524,6 +533,10 @@ class Agent:
                 new_messages = self.messages[msg_count_before:]
                 if new_messages:
                     self._archiver.append(new_messages)
+
+            # 迭代末 checkpoint
+            if self._checkpoint_mgr:
+                self._checkpoint_mgr.maybe_checkpoint(self, iteration=iteration)
 
             # --- Hook: iteration_end ---
             if self._hook_runner:

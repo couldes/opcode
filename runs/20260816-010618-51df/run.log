@@ -1,0 +1,1 @@
+task=interrupt-resume scenario=interrupt finish=stop success=True duration=9.36s iterations=5

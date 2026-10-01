@@ -16,9 +16,25 @@ class OpenAIProvider(BaseProvider):
             base_url=config.base_url,
             api_key=config.api_key,
         )
+        self._last_usage: dict | None = None
+
+    @property
+    def last_usage(self) -> dict | None:
+        return self._last_usage
 
     def chat(self, messages: list[Message]) -> Message:
         raise NotImplementedError("use achat() for streaming")
+
+    @staticmethod
+    def _normalize_usage(usage) -> dict:
+        details = getattr(usage, "prompt_tokens_details", None)
+        cached = getattr(details, "cached_tokens", 0) or 0
+        return {
+            "input_tokens": usage.prompt_tokens,
+            "output_tokens": usage.completion_tokens,
+            "cache_creation_input_tokens": 0,
+            "cache_read_input_tokens": cached,
+        }
 
     async def achat(
         self, messages: list[Message], tools: list[dict] | None = None,
@@ -33,6 +49,7 @@ class OpenAIProvider(BaseProvider):
             "model": self._model,
             "messages": openai_messages,
             "stream": True,
+            "stream_options": {"include_usage": True},
         }
         if tools:
             kwargs["tools"] = tools
@@ -43,6 +60,9 @@ class OpenAIProvider(BaseProvider):
         tool_call_bufs: dict[int, dict] = {}
 
         async for chunk in stream:
+            if chunk.usage:
+                self._last_usage = self._normalize_usage(chunk.usage)
+
             if not chunk.choices:
                 continue
 

@@ -1,0 +1,5 @@
+name: multi-turn
+layer: memory
+scenario: normal
+verify_script: verify.py
+verify_timeout: 120

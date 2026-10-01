@@ -9,7 +9,7 @@ from opcode_cli.session.archiver import SessionArchiver
 class TestSessionArchiver:
     def test_generate_id_format(self):
         sid = SessionArchiver.generate_id()
-        assert len(sid) == 20  # YYYYMMDD-HHMMSS-xxxx
+        assert len(sid) == 24  # YYYYMMDD-HHMMSS-xxxxxxxx (32-bit suffix)
         assert sid[8] == "-"
         assert sid[15] == "-"
 

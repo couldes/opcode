@@ -1,0 +1,6 @@
+name: ctx-long
+layer: context
+scenario: normal
+context_window: 8000
+verify_script: verify.py
+verify_timeout: 120

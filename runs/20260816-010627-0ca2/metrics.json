@@ -1,0 +1,39 @@
+{
+  "success": true,
+  "finish_reason": "stop",
+  "duration_sec": 9.875,
+  "iterations": 5,
+  "input_tokens": 2053,
+  "output_tokens": 0,
+  "cache_creation_tokens": 0,
+  "cache_read_tokens": 10496,
+  "tool_calls_total": 7,
+  "tool_calls_by_name": {
+    "glob_find": 1,
+    "read_file": 4,
+    "edit_file": 1,
+    "run_command": 1
+  },
+  "tool_call_failures": 0,
+  "repeated_read_files": 0,
+  "read_file_calls": {
+    "C:\\Users\\95desire\\AppData\\Local\\Temp\\opcode-eval-7nmpf3ll\\models.py": 1,
+    "C:\\Users\\95desire\\AppData\\Local\\Temp\\opcode-eval-7nmpf3ll\\utils.py": 1,
+    "C:\\Users\\95desire\\AppData\\Local\\Temp\\opcode-eval-7nmpf3ll\\test_app.py": 1,
+    "C:\\Users\\95desire\\AppData\\Local\\Temp\\opcode-eval-7nmpf3ll\\services.py": 1
+  },
+  "compression_events": [],
+  "avg_compression_ratio": 0.0,
+  "total_compression_savings": 0,
+  "offload_count": 0,
+  "summary_count": 0,
+  "skipped_reasons": [],
+  "resumed": false,
+  "drift_detected": false,
+  "drifted_files": [],
+  "verify": {
+    "success": true,
+    "exit_code": 0,
+    "output": ".                                                                        [100%]\n1 passed in 0.12s\n\n\n"
+  }
+}

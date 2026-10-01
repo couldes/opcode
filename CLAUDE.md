@@ -1,58 +1,180 @@
-# CLAUDE.md
+# opcode — Development Guide
 
-## 项目概要
+## Project Overview
 
-opcode 是一个 CLI AI 编程助手，通过 Textual TUI 提供交互界面，支持多 LLM 提供商、权限检查、MCP 协议扩展和上下文管理。
+CLI AI coding agent with Textual TUI, multi-provider LLM support, 8-layer permission control, MCP tool discovery, and dual-phase context compression.
 
-## 技术栈
+## Tech Stack
 
-- **Python**: >= 3.10，虚拟环境 `.venv`
-- **TUI**: Textual 8.2.8（注意大版本间 API 不兼容，改之前先 `import textual; print(textual.__version__)`）
-- **安装**: `.venv/Scripts/pip install -e .`
-- **启动**: `opcode` → `opcode_cli.main:main`
+- **Python**: >= 3.10 (virtualenv `.venv`)
+- **TUI**: Textual 8.2.8 (⚠️ API changes across majors; check version before updates)
+- **Install**: `python -m pip install -e .`
+- **Run**: `opcode` → entry point `opcode_cli.main:main`
 
-## 目录结构
+## Directory Structure
 
 ```
 src/opcode_cli/
-  agent/       — Agent 循环、事件系统、工具调度
-  context/     — 上下文管理（Token 估算、大结果存盘、对话摘要）
-  mcp/         — MCP 服务发现与工具适配
-  permission/  — 权限规则检查
-  provider/    — LLM 提供商适配（Anthropic / OpenAI 协议）
-  prompt/      — 系统提示词构建
-  tools/       — 内置工具实现
-  tui/         — Textual TUI（主界面 app.py）
+├── agent/       # Event loop, AsyncIterator[AgentEvent], tool dispatching
+├── context/     # Token counting, offload manager, conversation summarization
+├── mcp/         # MCP service discovery, tool adaptation (MCPToolAdapter)
+├── permission/  # 8-layer decision pipeline (L0-L5), mode matrix
+├── provider/    # BaseProvider abstract, Anthropic/OpenAI adapters with streaming
+├── prompt/      # Modular system prompt builder, cache control tags
+├── tools/       # Pydantic v2 parameter models, ToolRegistry, ToolBatcher
+└── tui/         # TimelineRenderer, PermissionWidget, OpcodeApp(agent)
 ```
 
-## 核心架构
+## Core Architecture Patterns
 
-- **Agent** 持有 provider、registry、permission_checker、context_manager，对外暴露 `run(user_input)` 异步生成器
-- **ContextManager** 在每次 API 请求前执行 offload（大工具结果存盘）→ summary（对话摘要）两阶段压缩
-- **TUI** 通过 `OpcodeApp(agent)` 启动，监听 Agent 事件流渲染 UI
-- **工具注册** 在 `main()` 中完成，MCP 工具在 Agent 首次迭代时动态注册
-- **权限检查** 支持 strict/default/accept-edits/permissive 四档模式
+### Agent Loop
 
-## Textual 项目参考
+**AsyncIterator** yielding events consumed by TUI. Each iteration:
 
-- Textual 8.x 中按键处理方法是 `_on_key`（不是 `on_key`）
-- 事件传播用 `event.stop()` 终止，`event.prevent_default()` 用法因版本而异
-- Widget 内部 `_on_key` 和自身 BINDINGS 优先于 App BINDINGS；App 层绑定只处理子 widget 未消费的键
-- 覆盖 widget 内建行为应通过子类化而非在 App 层处理
-- 快速检查 API 是否存在：`python -c "from textual.app import App; print(hasattr(App, 'method_name'))"`
-- 快速检查 widget BINDINGS：`python -c "from textual.widgets import <Widget>; [print(b.key, b.action) for b in Widget.BINDINGS]"`
+1. Poll subagents & team mailbox → inject memories → context compression
+2. Build filtered tool schema (role-based / skill-based whitelists)
+3. Stream LLM response (track token usage)
+4. Execute tools: permission check → batch run (read parallel / write serial) → archive results
+5. Trigger async memory extraction
 
-## 经验记录
+**Events emitted**: session_start, user_input, iteration_start/end, assistant_response, tool_pre/post_execute, error.
 
-`experience/` 目录记录了本项目开发中踩过的坑和成功的解决方案。遇到类似问题时先查阅，解决新问题后追加新记录。每条记录包含：问题描述 → 根因 → 试错过程 → 成功方法 → 教训。
+### ContextManager · Compression Pipeline
 
-## 上下文管理阈值
+Runs before every API call:
 
-- OffloadManager 单条阈值 20000 字符、合计阈值 40000 字符
-- before_request 自动压缩 safety_margin=13000，手动 /compress 时 safety_margin=3000
-- ContextManager 依赖 provider 调用 LLM 生成摘要，无 provider 时只做 offload 不做 summary
+```
+offload(≥20K/single, ≥40K/total) → summary(LLM-generated)
+   ↓                                    ↓
+disk storage                          keep last 5 interactions
+replace with preview link             circuit breaker after 3 failures
+```
 
+**Thresholds**:
+- Auto-compression (before_request): safety_margin=13000
+- Manual `/compress`: safety_margin=3000
+- No provider? Only offload, no summary.
 
-- OffloadManager 单条阈值 20000 字符、合计阈值 40000 字符
-- before_request 自动压缩 safety_margin=13000，手动 /compress 时 safety_margin=3000
-- ContextManager 依赖 provider 调用 LLM 生成摘要，无 provider 时只做 offload 不做 summary
+### PermissionChecker
+
+Eight-layer sequential checks:
+
+| Layer | Check | Result |
+|-------|-------|--------|
+| L0 | Plan mode | auto_allow |
+| L1 | Read-only | auto_allow |
+| L1b | Danger blacklist | auto_block |
+| L2 | Path sandbox | block outside root |
+| L3 | fnmatch rules | policy |
+| L3b | Session override | allow |
+| L4 | Mode matrix | fallback |
+| L5 | Human confirm | user_decision |
+
+**Modes**: `strict`(deny_all) → `default`(read_ok,write_ask) → `accept-edits`(commands_ask) → `permissive`(allow_all)
+
+### Tool Registry
+
+**Built-in** (Pydantic v2 models):
+- ReadFile · WriteFile · EditFile
+- RunCommand
+- GlobFind · GrepSearch
+- AgentTool
+
+**Dynamic registration**: MCP tools at first Agent iteration, skills importing `tools/*.py`.
+
+**Execution**: `ToolBatcher` parallelizes read-only (is_read_only=True), serializes writes.
+
+### MCP Integration
+
+Auto-discovers external tools via stdio or HTTP transport. Namespace pattern `{server_name}__{tool_name}`. Adapter layer converts to standard tool interface (`MCPToolAdapter`). Lazy connection on first iteration to avoid startup overhead.
+
+### Team System
+
+**Persistence**: `~/.opcode/teams/<name>/` → config, roster, runtime, tasks
+
+**Features**:
+- JSONL message mailbox (async communication)
+- Shared task board (CRUD operations)
+- Approval workflow for critical ops
+- Member backends: tmux / iTerm2 / in-process
+- Coordinator mode: disable direct edits, use orchestrator
+
+### Subagent Modes
+
+Git Worktree isolation, auto-cleanup:
+
+| Mode | Context Scope | Tool Filter | Scenario |
+|------|---------------|-------------|----------|
+| Role-based | Blank + role prompt | forbid nesting → whitelist → blacklist | Review, test, docs |
+| Fork | Full parent history | parent's full set | Branch tasks |
+
+## Event Hooks
+
+8 lifecycle points × 4 action types:
+
+**Actions**: shell_command, prompt_injection, spawn_subagent, http_request
+
+**Options**: conditions, run_once flag, background/foreground, timeout
+
+**Config**: `.opcode/hooks.yaml`
+
+## System Prompt · Priority Levels
+
+| Priority | Module | Source |
+|----------|--------|--------|
+| 0 | Project instructions | CLAUDE.md |
+| 1-7 | Identity, constraints, task mode, actions, tools, tone, output | fixed modules |
+| 90 | Skill index | dynamic |
+| 99 | Memory context | automatic |
+
+Supports Anthropic caching control marks.
+
+## Textual 8.x Gotchas
+
+- Key handler name: `_on_key()` not `on_key()`
+- Stop event propagation: `event.stop()`
+- Widget-level `_on_key` + own BINDINGS > App-level BINDINGS
+- App bindings only handle keys not consumed by children
+- Override widget behavior via subclassing, not app-level handlers
+
+**Quick checks**:
+```bash
+python -c "from textual.app import App; print(hasattr(App, 'method_name'))"
+python -c "from textual.widgets import Button; [print(b.key, b.action) for b in Button.BINDINGS]"
+```
+
+## Skills System
+
+Behavior packages defined in YAML/Markdown. 3 scopes: built-in / user / project.
+
+**Features**:
+- Tool whitelist/blacklist declarations
+- Dynamic imports from `tools/*.py`
+- Installed via `InstallSkillTool`
+
+## Experience Log
+
+`experience/` directory documents lessons learned during development. Each record contains: Problem → Root Cause → Trial Process → Solution → Lessons.
+
+Reference before tackling similar issues; append new records after resolution.
+
+## Testing
+
+```bash
+pytest tests/ -v --tb=short
+```
+
+Async mode configured via `pyproject.toml`.
+
+---
+
+## Quick Reference Checklist
+
+- [ ] Check Textual version before API changes
+- [ ] Consult `experience/` before re-solving known issues
+- [ ] Use `offload` for big results (>20K), `summary` for long conversations
+- [ ] Remember safety margins: auto=13K, manual=3K
+- [ ] Event hooks config: `.opcode/hooks.yaml`
+- [ ] Team persistence: `~/.opcode/teams/<name>/`
+- [ ] MCP tools registered at first Agent iteration, not startup
+- [ ] Git Worktree = isolated + auto-cleanup for subagents

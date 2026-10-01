@@ -6,10 +6,12 @@ from pydantic import BaseModel
 
 from opcode_cli.agent.agent import Agent
 from opcode_cli.agent.events import (
+    CacheMetricsEvent,
     DoneEvent,
     ErrorEvent,
     ProgressEvent,
     TextDelta,
+    TokenUsageEvent,
     ToolCallStart,
     ToolResultEvent,
 )
@@ -217,3 +219,30 @@ async def test_agent_single_unknown_tool_tolerated(registry):
         events.append(e)
 
     assert events[-1].finish_reason == "stop"
+
+
+@pytest.mark.asyncio
+async def test_agent_emits_usage_events(registry):
+    """Provider last_usage triggers TokenUsageEvent + CacheMetricsEvent."""
+    prov = MockProvider(rounds=[
+        [StreamChunk(content="done"), StreamChunk(finish_reason="stop")],
+    ])
+    prov.last_usage = {
+        "input_tokens": 100,
+        "output_tokens": 50,
+        "cache_creation_input_tokens": 0,
+        "cache_read_input_tokens": 30,
+    }
+    agent = Agent(prov, registry)
+    events = []
+    async for e in agent.run("test"):
+        events.append(e)
+
+    usage = [e for e in events if isinstance(e, TokenUsageEvent)]
+    assert len(usage) == 1
+    assert usage[0].input_tokens == 100
+    assert usage[0].output_tokens == 50
+
+    cache = [e for e in events if isinstance(e, CacheMetricsEvent)]
+    assert len(cache) == 1
+    assert cache[0].cache_read_input_tokens == 30

@@ -1,0 +1,6 @@
+name: interrupt-resume
+layer: recovery
+scenario: interrupt
+interrupt_at: 3
+verify_script: verify.py
+verify_timeout: 120

@@ -5,7 +5,7 @@ from pathlib import Path
 
 logger = logging.getLogger(__name__)
 
-_SESSION_ID_PATTERN = re.compile(r"^(\d{8}-\d{6})-[0-9a-f]{4}\.jsonl$")
+_SESSION_ID_PATTERN = re.compile(r"^(\d{8}-\d{6})-[0-9a-f]{8}\.jsonl$")
 
 
 def cleanup(sessions_dir: Path, max_age_days: int = 30) -> int:

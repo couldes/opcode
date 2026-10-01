@@ -1,0 +1,1 @@
+task=fix-syntax scenario=normal finish=stop success=True duration=9.30s iterations=5

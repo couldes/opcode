@@ -108,7 +108,18 @@ def main() -> None:
         choices=["auto", "tmux", "iterm2", "in-process"],
         help="member runtime backend (default: auto-detect)",
     )
+    subparsers = parser.add_subparsers(dest="command")
+    from opcode_cli.eval.cli import add_eval_parser
+    add_eval_parser(subparsers)
     args = parser.parse_args()
+
+    # --- 评测命令：eval / eval-report，跳过完整 Agent 装配 ---
+    if args.command == "eval":
+        from opcode_cli.eval.cli import cmd_eval
+        sys.exit(cmd_eval(args))
+    if args.command == "eval-report":
+        from opcode_cli.eval.cli import cmd_report
+        sys.exit(cmd_report(args))
 
     # --- 队员模式：--team 和 --member 都存在时跳过 TUI，直接运行队员循环 ---
     if args.team and args.member:

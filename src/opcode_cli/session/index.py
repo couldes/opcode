@@ -5,7 +5,7 @@ from pathlib import Path
 
 from opcode_cli.session import SessionMeta
 
-_ID_PATTERN = re.compile(r"^(\d{8}-\d{6})-[0-9a-f]{4}$")
+_ID_PATTERN = re.compile(r"^(\d{8}-\d{6})-[0-9a-f]{8}$")
 
 
 def _parse_id_from_filename(filename: str) -> tuple[str, datetime] | None:

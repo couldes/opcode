@@ -1,0 +1,9 @@
+name: workspace-drift
+layer: recovery
+scenario: drift
+interrupt_at: 3
+drift_file: config.yml
+drift_content: |
+  feature: new
+verify_script: verify.py
+verify_timeout: 120

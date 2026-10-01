@@ -34,7 +34,7 @@ class SessionArchiver:
     @staticmethod
     def generate_id() -> str:
         ts = datetime.now().strftime("%Y%m%d-%H%M%S")
-        suffix = secrets.token_hex(2)
+        suffix = secrets.token_hex(4)
         return f"{ts}-{suffix}"
 
     def append(self, messages: list[Message]) -> None:

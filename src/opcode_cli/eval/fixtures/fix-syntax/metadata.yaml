@@ -1,0 +1,5 @@
+name: fix-syntax
+layer: stability
+scenario: normal
+verify_script: verify.py
+verify_timeout: 120
